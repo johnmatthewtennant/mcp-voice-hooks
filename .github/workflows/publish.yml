@@ -25,7 +25,16 @@ jobs:
       - name: Build
         run: npm run build
       
+      - name: Determine npm tag
+        id: npm-tag
+        run: |
+          if [[ "${{ github.ref_name }}" == *"beta"* ]]; then
+            echo "tag=beta" >> $GITHUB_OUTPUT
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          fi
+      
       - name: Publish to npm
-        run: npm publish --registry https://registry.npmjs.org/
+        run: npm publish --tag ${{ steps.npm-tag.outputs.tag }} --registry https://registry.npmjs.org/
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
