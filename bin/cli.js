@@ -54,6 +54,9 @@ async function configureClaudeCodeSettings() {
   const settingsPath = path.join(claudeDir, 'settings.local.json');
   // This was used in versions <= v1.0.21.
   const oldSettingsPath = path.join(claudeDir, 'settings.json');
+  
+  // Detect if running on Windows
+  const isWindows = process.platform === 'win32';
 
   console.log('⚙️  Configuring project Claude Code settings...');
 
@@ -103,7 +106,62 @@ async function configureClaudeCodeSettings() {
   }
 
   // Add hook configuration with inline commands
-  const hookConfig = {
+  // Windows requires different command syntax
+  const hookConfig = isWindows ? {
+    // Windows-compatible commands using PowerShell environment variable syntax
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -Command \"$port = if ($env:MCP_VOICE_HOOKS_PORT) { $env:MCP_VOICE_HOOKS_PORT } else { '5111' }; try { Invoke-RestMethod -Uri \\\"http://localhost:$port/api/hooks/stop\\\" -Method POST } catch { Write-Output '{\\\"decision\\\": \\\"approve\\\", \\\"reason\\\": \\\"voice-hooks unavailable\\\"}' }\""
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^(?!mcp__voice-hooks__).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -Command \"$port = if ($env:MCP_VOICE_HOOKS_PORT) { $env:MCP_VOICE_HOOKS_PORT } else { '5111' }; try { Invoke-RestMethod -Uri \\\"http://localhost:$port/api/hooks/pre-tool\\\" -Method POST } catch { Write-Output '{\\\"decision\\\": \\\"approve\\\", \\\"reason\\\": \\\"voice-hooks unavailable\\\"}' }\""
+          }
+        ]
+      },
+      {
+        "matcher": "^mcp__voice-hooks__speak$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -Command \"$port = if ($env:MCP_VOICE_HOOKS_PORT) { $env:MCP_VOICE_HOOKS_PORT } else { '5111' }; try { Invoke-RestMethod -Uri \\\"http://localhost:$port/api/hooks/pre-speak\\\" -Method POST } catch { Write-Output '{\\\"decision\\\": \\\"approve\\\", \\\"reason\\\": \\\"voice-hooks unavailable\\\"}' }\""
+          }
+        ]
+      },
+      {
+        "matcher": "^mcp__voice-hooks__wait_for_utterance$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -Command \"$port = if ($env:MCP_VOICE_HOOKS_PORT) { $env:MCP_VOICE_HOOKS_PORT } else { '5111' }; try { Invoke-RestMethod -Uri \\\"http://localhost:$port/api/hooks/pre-wait\\\" -Method POST } catch { Write-Output '{\\\"decision\\\": \\\"approve\\\", \\\"reason\\\": \\\"voice-hooks unavailable\\\"}' }\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^(?!mcp__voice-hooks__).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -Command \"$port = if ($env:MCP_VOICE_HOOKS_PORT) { $env:MCP_VOICE_HOOKS_PORT } else { '5111' }; try { Invoke-RestMethod -Uri \\\"http://localhost:$port/api/hooks/post-tool\\\" -Method POST } catch { Write-Output '{}' }\""
+          }
+        ]
+      }
+    ]
+  } : {
+    // Unix/Mac commands using curl with shell environment variable syntax
     "Stop": [
       {
         "matcher": "",
