@@ -52,7 +52,7 @@ Say something to Claude. You will need to send one message in the Claude Code CL
 ## Browser Compatibility
 
 - ✅ **Chrome**: Full support for speech recognition, browser text-to-speech, and system text-to-speech
-- ⚠️ **Safari**: Full support for speech recognition, but only system text-to-speech is supported
+- ⚠️ **Safari**: Full support for speech recognition and system text-to-speech, but browser text-to-speech cannot load high-quality voices
 - ❌ **Edge**: Speech recognition not working on Apple Silicon (language-not-supported error)
 
 ## Voice responses
@@ -70,7 +70,7 @@ You can download high quality voices from the system voice menu: `System Setting
 
 Click the info icon next to the system voice dropdown. Search for "Siri" to find the highest quality voices. You'll have to trigger a download of the voice.
 
-Once it's downloaded, you can select it in the system voice menu.
+Once it's downloaded, you can select it in the Browser Voice (Local) menu in Chrome.
 
 Test it with the bash command:
 
@@ -81,6 +81,8 @@ say "Hi, this is your Mac system voice"
 To use Siri voices with voice-hooks, you need to set your system voice and select "Mac System Voice" in the voice-hooks browser interface.
 
 Other downloaded voices will show up in the voice dropdown in the voice-hooks browser interface so you can select them there directly, instead of using the "Mac System Voice" option.
+
+There is a bug in Safari that prevents browser text-to-speech from loading high-quality voices after browser restart. This is a Safari Web Speech API limitation. To use high-quality voices in Safari you need to set your system voice to Siri and select "Mac System Voice" in the voice-hooks browser interface.
 
 ## Manual Hook Installation
 

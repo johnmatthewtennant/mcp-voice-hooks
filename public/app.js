@@ -350,14 +350,33 @@ class VoiceHooksClient {
 
         // Get available voices
         this.voices = [];
+        
+        // Enhanced voice loading with deduplication
         const loadVoices = () => {
-            this.voices = window.speechSynthesis.getVoices();
-            this.debugLog('Available voices:', this.voices);
+            const voices = window.speechSynthesis.getVoices();
+            
+            // Deduplicate voices - keep the first occurrence of each unique voice
+            const deduplicatedVoices = [];
+            const seen = new Set();
+            
+            voices.forEach(voice => {
+                // Create a unique key based on name, language, and URI
+                const key = `${voice.name}-${voice.lang}-${voice.voiceURI}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    deduplicatedVoices.push(voice);
+                }
+            });
+            
+            this.voices = deduplicatedVoices;
             this.populateVoiceList();
         };
 
-        // Load voices initially and on change
+        // Load voices initially and with a delayed retry for reliability
         loadVoices();
+        setTimeout(loadVoices, 100);
+        
+        // Set up voice change listener
         if (window.speechSynthesis.onvoiceschanged !== undefined) {
             window.speechSynthesis.onvoiceschanged = loadVoices;
         }
@@ -438,6 +457,7 @@ class VoiceHooksClient {
 
     populateVoiceList() {
         if (!this.voiceSelect || !this.localVoicesGroup || !this.cloudVoicesGroup) return;
+        
 
         // First populate the language filter
         this.populateLanguageFilter();
