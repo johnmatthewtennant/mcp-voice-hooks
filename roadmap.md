@@ -41,6 +41,43 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [x] find the mcp-proxy logic and fix it or remove it from the readme
 - [ ] clean up unused code (index.ts?)
 - [ ] switch to using command line arguments for the configuration (except fot the port becuase we need to reference that in the hooks)
+
+### OpenAI Integration (Enhanced Mobile Support)
+
+- [ ] Add OpenAI API key configuration option
+  - [ ] Add API key input field in browser interface  
+  - [ ] Store API key securely on server
+  - [ ] Add environment variable support for API key
+- [ ] Implement OpenAI speech-to-text (Whisper) integration
+  - [ ] Add browser/OpenAI toggle for dictation input method
+  - [ ] Create audio recording functionality for OpenAI API calls
+  - [ ] Implement fallback to browser Web Speech API when OpenAI unavailable
+  - [ ] Handle audio chunking and streaming for real-time experience
+- [ ] Add OpenAI text-to-speech voices to TTS dropdown
+  - [ ] Integrate OpenAI TTS API voices (alloy, echo, fable, onyx, nova, shimmer)
+  - [ ] Add OpenAI voices as new section in voice dropdown alongside Browser/System voices
+  - [ ] Implement OpenAI TTS playback in browser
+  - [ ] Handle OpenAI TTS rate limiting and errors gracefully
+
+### UI/UX Improvements
+
+- [ ] Revamp message queue UI as messenger-style conversation
+  - [ ] Display user voice messages as chat bubbles on the right side
+  - [ ] Display Claude responses (spoken text) as chat bubbles on the left side
+  - [ ] Show timestamps and message status (pending, delivered, responded)
+  - [ ] Add message grouping and visual conversation flow
+  - [ ] Replace current utterances list with conversation-style interface
+- [ ] Add typing capability with voice dictation
+  - [ ] Add text input field at bottom of conversation interface
+  - [ ] Replace current "Start Listening" button with dictation button in text input
+  - [ ] Move real-time speech transcription from top of screen into text input field
+  - [ ] Maintain auto-send behavior when Web Speech API detects complete utterance
+  - [ ] Support both manual typing and voice dictation with same auto-send functionality
+  - [ ] Allow users to manually type and send messages as well
+- [ ] Simplify voice settings interface
+  - [ ] Keep voice responses toggle prominent in main interface
+  - [ ] Move voice selection, rate settings, and advanced options to settings menu
+  - [ ] Create cleaner, less cluttered main conversation interface
 - [x] Remove the text input field from the frontend.
 - [x] Make the in-progress text box permanent so the layout doesn't jump around as the user starts and stops speaking
 - [x] remove the limit() parameter from the dequeue_utterances MCP tool. It should just dequeue all utterances.
