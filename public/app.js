@@ -2,6 +2,9 @@ class VoiceHooksClient {
     constructor() {
         this.baseUrl = window.location.origin;
         this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
+        
+        // Detect if we're running in Safari
+        this.isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
         this.refreshBtn = document.getElementById('refreshBtn');
         this.clearAllBtn = document.getElementById('clearAllBtn');
         this.utterancesList = document.getElementById('utterancesList');
@@ -136,7 +139,10 @@ class VoiceHooksClient {
 
         // TTS controls
         this.voiceSelect.addEventListener('change', (e) => {
+            // DEBUG: Log voice selection changes
+            console.log(`[Voice Debug] Voice selection changed to: ${e.target.value}`);
             this.selectedVoice = e.target.value;
+            
             // Save selected voice to localStorage
             localStorage.setItem('selectedVoice', this.selectedVoice);
             this.updateVoicePreferences();
@@ -350,16 +356,91 @@ class VoiceHooksClient {
 
         // Get available voices
         this.voices = [];
-        const loadVoices = () => {
-            this.voices = window.speechSynthesis.getVoices();
-            this.debugLog('Available voices:', this.voices);
+        
+        // Enhanced voice loading with comprehensive logging and deduplication
+        const enhancedLoadVoices = () => {
+            const voices = window.speechSynthesis.getVoices();
+            console.log(`[Voice Debug] Browser: ${this.isSafari ? 'Safari' : 'Other'}`);
+            console.log(`[Voice Debug] Total voices found: ${voices.length}`);
+            
+            voices.forEach((voice, index) => {
+                console.log(`[Voice Debug] ${index}: ${voice.name} | Lang: ${voice.lang} | Local: ${voice.localService} | URI: ${voice.voiceURI}`);
+            });
+            
+            // Check for duplicates
+            const nameGroups = {};
+            voices.forEach((voice, index) => {
+                if (!nameGroups[voice.name]) {
+                    nameGroups[voice.name] = [];
+                }
+                nameGroups[voice.name].push({ index, lang: voice.lang, uri: voice.voiceURI, local: voice.localService });
+            });
+            
+            Object.entries(nameGroups).forEach(([name, instances]) => {
+                if (instances.length > 1) {
+                    console.log(`[Voice Debug] DUPLICATE "${name}":`, instances);
+                }
+            });
+            
+            // Deduplicate voices - keep the first occurrence of each unique voice
+            const deduplicatedVoices = [];
+            const seen = new Set();
+            
+            voices.forEach(voice => {
+                // Create a unique key based on name, language, and URI
+                const key = `${voice.name}-${voice.lang}-${voice.voiceURI}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    deduplicatedVoices.push(voice);
+                } else {
+                    console.log(`[Voice Debug] Skipping duplicate: ${voice.name} (${voice.lang}) - ${voice.voiceURI}`);
+                }
+            });
+            
+            console.log(`[Voice Debug] Deduplicated: ${voices.length} -> ${deduplicatedVoices.length} voices`);
+            
+            this.voices = deduplicatedVoices;
             this.populateVoiceList();
         };
 
-        // Load voices initially and on change
-        loadVoices();
-        if (window.speechSynthesis.onvoiceschanged !== undefined) {
-            window.speechSynthesis.onvoiceschanged = loadVoices;
+        // Safari-specific handling with proper voice loading
+        if (this.isSafari) {
+            console.log('[Voice Debug] Safari detected - attempting voice loading...');
+            
+            // Try immediate load
+            enhancedLoadVoices();
+            
+            // Safari often needs multiple attempts and delays
+            setTimeout(() => {
+                console.log('[Voice Debug] Safari delayed load attempt 1...');
+                enhancedLoadVoices();
+            }, 100);
+            
+            setTimeout(() => {
+                console.log('[Voice Debug] Safari delayed load attempt 2...');
+                enhancedLoadVoices();
+            }, 500);
+            
+            setTimeout(() => {
+                console.log('[Voice Debug] Safari delayed load attempt 3...');
+                enhancedLoadVoices();
+            }, 1000);
+            
+            // Also listen for voice changes
+            if (window.speechSynthesis.onvoiceschanged !== undefined) {
+                window.speechSynthesis.onvoiceschanged = () => {
+                    console.log('[Voice Debug] Safari onvoiceschanged triggered');
+                    enhancedLoadVoices();
+                };
+            }
+        } else {
+            // Load voices initially for other browsers
+            enhancedLoadVoices();
+            
+            // Set up voice change listener for other browsers
+            if (window.speechSynthesis.onvoiceschanged !== undefined) {
+                window.speechSynthesis.onvoiceschanged = enhancedLoadVoices;
+            }
         }
 
         // Set default voice preferences
@@ -438,6 +519,9 @@ class VoiceHooksClient {
 
     populateVoiceList() {
         if (!this.voiceSelect || !this.localVoicesGroup || !this.cloudVoicesGroup) return;
+        
+        // DEBUG: Log voice population
+        console.log(`[Voice Debug] populateVoiceList called with ${this.voices.length} voices`);
 
         // First populate the language filter
         this.populateLanguageFilter();

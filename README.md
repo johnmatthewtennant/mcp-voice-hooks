@@ -52,7 +52,7 @@ Say something to Claude. You will need to send one message in the Claude Code CL
 ## Browser Compatibility
 
 - ✅ **Chrome**: Full support for speech recognition, browser text-to-speech, and system text-to-speech
-- ⚠️ **Safari**: Full support for speech recognition, but only system text-to-speech is supported
+- ✅ **Safari**: Full support for speech recognition and browser text-to-speech (with automatic voice loading and deduplication)
 - ❌ **Edge**: Speech recognition not working on Apple Silicon (language-not-supported error)
 
 ## Voice responses
