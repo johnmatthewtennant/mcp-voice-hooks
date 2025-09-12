@@ -41,11 +41,12 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [x] find the mcp-proxy logic and fix it or remove it from the readme
 - [ ] clean up unused code (index.ts?)
 - [ ] switch to using command line arguments for the configuration (except fot the port becuase we need to reference that in the hooks)
+- [ ] consider using suppressOutput for the hooks. Maybe just the stop hook and the pre-speak hook <https://docs.anthropic.com/en/docs/claude-code/hooks#common-json-fields>
 
 ### OpenAI Integration (Enhanced Mobile Support)
 
 - [ ] Add OpenAI API key configuration option
-  - [ ] Add API key input field in browser interface  
+  - [ ] Add API key input field in browser interface
   - [ ] Store API key securely on server
   - [ ] Add environment variable support for API key
 - [ ] Implement OpenAI speech-to-text (Whisper) integration
@@ -284,7 +285,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [x] Create API endpoint to check for pending utterances
   - [x] `/api/has-pending-utterances` returns `{ hasPending: boolean, pendingCount: number }`
 - [x] ~~Implement pre-tool use hook script~~ (removed)
-  - [x] ~~Checks for pending utterances before allowing tool execution~~ 
+  - [x] ~~Checks for pending utterances before allowing tool execution~~
   - [x] ~~Blocks tool execution if utterances are pending~~
   - [x] Forces Claude to use `dequeue_utterances` tool first
 - [x] Hook provides clear feedback about pending utterance count
