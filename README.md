@@ -168,32 +168,6 @@ When running in MCP-managed mode, the browser will automatically open if no fron
 }
 ```
 
-#### Auto-Deliver Voice Input Before Tools
-
-By default, voice input is not automatically delivered before tool execution to allow for faster tool execution. To enable auto-delivery before tools:
-
-```json
-{
-  "env": {
-    "MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT_BEFORE_TOOLS": "true"
-  }
-}
-```
-
-When auto-delivery before tools is enabled:
-
-- Voice input is automatically delivered before each tool execution
-- Tools may be delayed if there's pending voice input
-- This ensures voice commands are processed before tools run
-- **Note**: This setting only applies when `MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT` is enabled (default)
-
-When auto-delivery before tools is disabled (default):
-
-- Tools will execute immediately without checking for pending voice input
-- Voice input will only be processed at the stop hook or post-tool hook
-- **Important**: Delivered utterances that require voice responses will still be enforced
-- This provides better performance when voice interruption before tools is not needed
-
 #### Auto-Deliver Voice Input (Default)
 
 By default, mcp-voice-hooks automatically delivers voice input to Claude after tool use, before speaking, and before stopping:

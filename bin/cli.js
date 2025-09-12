@@ -117,15 +117,6 @@ async function configureClaudeCodeSettings() {
     ],
     "PreToolUse": [
       {
-        "matcher": "^(?!mcp__voice-hooks__|ExitPlanMode).*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
-          }
-        ]
-      },
-      {
         "matcher": "^mcp__voice-hooks__speak$",
         "hooks": [
           {

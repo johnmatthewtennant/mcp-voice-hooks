@@ -27,38 +27,6 @@ describe('conversation flow tracking', () => {
     app = express();
     app.use(express.json());
 
-    // Pre-tool hook endpoint
-    app.post('/api/hooks/pre-tool', (req, res) => {
-      const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
-
-      // Check for pending utterances
-      const pendingUtterances = queue.utterances.filter((u: any) => u.status === 'pending');
-      if (pendingUtterances.length > 0) {
-        res.json({
-          decision: 'block',
-          reason: `${pendingUtterances.length} pending utterance(s) must be dequeued first. Please use dequeue_utterances to process them.`
-        });
-        return;
-      }
-
-      // Check for delivered but unresponded utterances (when voice enabled)
-      if (voiceResponsesEnabled) {
-        const deliveredUtterances = queue.utterances.filter((u: any) => u.status === 'delivered');
-        if (deliveredUtterances.length > 0) {
-          res.json({
-            decision: 'block',
-            reason: `${deliveredUtterances.length} delivered utterance(s) require voice response. Please use the speak tool to respond before proceeding.`
-          });
-          return;
-        }
-      }
-
-      // All checks passed - allow tool use
-      lastToolUseTimestamp = new Date();
-      res.json({
-        decision: 'approve'
-      });
-    });
 
     // Pre-wait hook endpoint
     app.post('/api/hooks/pre-wait', (req, res) => {
@@ -193,18 +161,6 @@ describe('conversation flow tracking', () => {
   });
 
   describe('tool usage tracking', () => {
-    it('should track tool use timestamp when tools are approved', async () => {
-      expect(lastToolUseTimestamp).toBeNull();
-
-      const response = await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
-
-      expect(response.body).toEqual({ decision: 'approve' });
-      expect(lastToolUseTimestamp).not.toBeNull();
-      expect(lastToolUseTimestamp).toBeInstanceOf(Date);
-    });
-
     it('should track speak timestamp when speak is called', async () => {
       expect(lastSpeakTimestamp).toBeNull();
 
@@ -224,10 +180,8 @@ describe('conversation flow tracking', () => {
     });
 
     it('should block wait_for_utterance when not spoken after tool use', async () => {
-      // Use a tool first
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Try to wait without speaking
       const response = await request(app)
@@ -241,10 +195,8 @@ describe('conversation flow tracking', () => {
     });
 
     it('should allow wait_for_utterance after speaking', async () => {
-      // Use a tool
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Speak
       await request(app)
@@ -286,10 +238,8 @@ describe('conversation flow tracking', () => {
     });
 
     it('should block for delivered utterances before tool use check', async () => {
-      // Use a tool
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Add delivered utterance
       queue.utterances.push({
@@ -316,10 +266,8 @@ describe('conversation flow tracking', () => {
     });
 
     it('should block stop when not spoken after tool use', async () => {
-      // Use a tool first
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Try to stop without speaking
       const response = await request(app)
@@ -333,10 +281,8 @@ describe('conversation flow tracking', () => {
     });
 
     it('should allow stop when spoken after tool use and voice input is not active', async () => {
-      // Use a tool
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Speak
       await request(app)
@@ -354,10 +300,8 @@ describe('conversation flow tracking', () => {
     });
 
     it('should allow stop when all conditions are met', async () => {
-      // Use a tool
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Speak
       await request(app)
@@ -380,10 +324,8 @@ describe('conversation flow tracking', () => {
 
   describe('pre-wait hook with voice responses disabled', () => {
     it('should not enforce speak-after-tool-use when voice disabled', async () => {
-      // Use a tool
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Should allow wait without speaking
       const response = await request(app)
@@ -415,10 +357,8 @@ describe('conversation flow tracking', () => {
       // Enable voice input for this test
       voicePreferences.voiceInputActive = true;
 
-      // Use a tool
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Speak
       await request(app)
@@ -460,10 +400,8 @@ describe('conversation flow tracking', () => {
       // Enable voice input for this test
       voicePreferences.voiceInputActive = true;
 
-      // Use a tool
-      await request(app)
-        .post('/api/hooks/pre-tool')
-        .send({});
+      // Simulate tool use
+      lastToolUseTimestamp = new Date();
 
       // Speak
       await request(app)

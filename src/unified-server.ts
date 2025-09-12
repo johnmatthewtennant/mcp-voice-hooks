@@ -23,7 +23,6 @@ const __dirname = path.dirname(__filename);
 const WAIT_TIMEOUT_SECONDS = 60;
 const HTTP_PORT = process.env.MCP_VOICE_HOOKS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_PORT) : 5111;
 const AUTO_DELIVER_VOICE_INPUT = process.env.MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT !== 'false'; // Default to true (auto-deliver enabled)
-const AUTO_DELIVER_VOICE_INPUT_BEFORE_TOOLS = process.env.MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT_BEFORE_TOOLS === 'true'; // Default to false (don't auto-deliver voice input before tools. Only effective if auto-deliver is enabled)
 
 // Promisified exec for async/await
 const execAsync = promisify(exec);
@@ -367,22 +366,17 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'wait' | 'stop' |
     const pendingUtterances = queue.utterances.filter(u => u.status === 'pending');
     if (pendingUtterances.length > 0) {
       if (AUTO_DELIVER_VOICE_INPUT) {
-        // Auto mode: check if we should auto-deliver
-        if (attemptedAction === 'tool' && !AUTO_DELIVER_VOICE_INPUT_BEFORE_TOOLS) {
-          // Skip auto-delivery for tools when disabled
-        } else {
-          // Auto-dequeue for non-tool actions, or for tools when enabled
-          const dequeueResult = dequeueUtterancesCore();
+        // Auto mode: auto-dequeue for all actions
+        const dequeueResult = dequeueUtterancesCore();
 
-          if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
-            // Reverse to show oldest first
-            const reversedUtterances = dequeueResult.utterances.reverse();
+        if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
+          // Reverse to show oldest first
+          const reversedUtterances = dequeueResult.utterances.reverse();
 
-            return {
-              decision: 'block',
-              reason: formatVoiceUtterances(reversedUtterances)
-            };
-          }
+          return {
+            decision: 'block',
+            reason: formatVoiceUtterances(reversedUtterances)
+          };
         }
       } else {
         // Manual mode: always block and tell assistant to use dequeue_utterances tool
@@ -503,11 +497,6 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'wait' | 'stop' |
 }
 
 // Dedicated hook endpoints that return in Claude's expected format
-app.post('/api/hooks/pre-tool', (_req: Request, res: Response) => {
-  const result = handleHookRequest('tool');
-  res.json(result);
-});
-
 app.post('/api/hooks/stop', async (_req: Request, res: Response) => {
   const result = await handleHookRequest('stop');
   res.json(result);
@@ -720,13 +709,11 @@ app.listen(HTTP_PORT, async () => {
     console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
     console.log(`[Mode] Running in ${IS_MCP_MANAGED ? 'MCP-managed' : 'standalone'} mode`);
     console.log(`[Auto-deliver] Voice input auto-delivery is ${AUTO_DELIVER_VOICE_INPUT ? 'enabled (tools hidden)' : 'disabled (tools shown)'}`);
-    console.log(`[Pre-tool Hook] Auto-deliver voice input before tools is ${AUTO_DELIVER_VOICE_INPUT_BEFORE_TOOLS ? 'enabled' : 'disabled'}`);
   } else {
     // In MCP mode, write to stderr to avoid interfering with protocol
     console.error(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
     console.error(`[Mode] Running in MCP-managed mode`);
     console.error(`[Auto-deliver] Voice input auto-delivery is ${AUTO_DELIVER_VOICE_INPUT ? 'enabled (tools hidden)' : 'disabled (tools shown)'}`);
-    console.error(`[Pre-tool Hook] Auto-deliver voice input before tools is ${AUTO_DELIVER_VOICE_INPUT_BEFORE_TOOLS ? 'enabled' : 'disabled'}`);
   }
 
   // Auto-open browser if no frontend connects within 3 seconds

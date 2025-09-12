@@ -36,7 +36,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 ### Next tasks
 
 - [x] make sure voice input and voice responses are disabled when the browser is closed
-- [x] make the disable pre-tool hook configuration more nuanced. It should only control if we deqeueue before tools. We always want to enforce speaking if there are unresponded utterances.
+- [x] ~~make the disable pre-tool hook configuration more nuanced. It should only control if we deqeueue before tools. We always want to enforce speaking if there are unresponded utterances.~~ (Pre-tool hook removed)
 - [ ] add a note to the pre-speak hook that the voice response was not delivered because the assistant needs to read the new utterances first
 - [x] find the mcp-proxy logic and fix it or remove it from the readme
 - [ ] clean up unused code (index.ts?)
@@ -90,7 +90,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [x] re-enable requirement for Claude to speak before stopping when 1.0.45 version of claude code is released with the stop hook fix
 - [x] eliminate timeout check in stop hook. Only check if voice input is active.
 - [x] eliminate time-to-wait argument from wait_for_utterance tool. Default to 60 seconds.
-- [x] make the formatting consistent between the pre-tool auto-dequeue and the stop hook auto-wait. Both should have the speak reminder at the end if voice responses are enabled.
+- [x] ~~make the formatting consistent between the pre-tool auto-dequeue and the stop hook auto-wait. Both should have the speak reminder at the end if voice responses are enabled.~~ (Pre-tool hook removed)
 - [ ] add configurable timeout for wait_for_utterance tool on frontend
 - [x] investigate if post-tool hook can send info to assistant and dequeue in there
 - [x] add hint to post-tool hook that assistant should speak if there are unresponded utterances
@@ -102,7 +102,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [x] add a front-end indicator when Claude is waiting for utterances
 - [x] make the auto-wait and auto dequeue behavior configurable? Alternatively, eliminate the tools and just use the hooks.
   - [x] add a config option to hide the tools and enable auto-wait and auto-dequeue
-- [ ] Make the "must speak" stop hook text more consistent with the pre-tool-auto-dequeue and auto-wait text about voice input being active
+- [ ] ~~Make the "must speak" stop hook text more consistent with the pre-tool-auto-dequeue and auto-wait text about voice input being active~~ (Pre-tool hook removed)
 - [ ] Investigate if we can show and hide MCP tools live without restarting claude code (e.g. hide SPEAK if voice responses are disabled)
 - [ ] MVP
   - [x] add a warning when adjusting rate for google voices that the google voices don't work well with speech rate
@@ -168,7 +168,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
   - [x] remove the MCP_VOICE_RESPONSES_ENABLED environment variable and switch all references to it to --speak
   - [x] update the readme to reflect the new CLI argument
 - [x] Investigate hiding the speak mcp tools when voice responses are disabled
-- [ ] Investigate consolidating the pre-tool hook, pre-speak hook, and pre-wait hook into a single hook that runs before all tools and checks which tool is being used and switches logic based on that
+- [ ] ~~Investigate consolidating the pre-tool hook, pre-speak hook, and pre-wait hook into a single hook that runs before all tools and checks which tool is being used and switches logic based on that~~ (Pre-tool hook removed)
 - [x] Improve conversation flow by tracking tool usage ✅ **COMPLETED**
   - [x] Remove speak_and_then_wait_for_utterance tool (use separate speak and wait_for_utterance instead)
   - [x] Track timestamp of last approved tool use
@@ -233,7 +233,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [x] Created unit tests for utterance state transitions
 - [x] All tests passing (58 total)
 - [x] create dedicated endpoints for each hook
-  - [x] pre-tool hook
+  - [x] ~~pre-tool hook~~ (removed)
   - [x] stop hook
 - [x] have the server respond in the exact format that can be passed directly to claude. e.g. echo "{\"decision\": \"block\", \"reason\": \"$reason\"}"
 
@@ -283,9 +283,9 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 
 - [x] Create API endpoint to check for pending utterances
   - [x] `/api/has-pending-utterances` returns `{ hasPending: boolean, pendingCount: number }`
-- [x] Implement pre-tool use hook script
-  - [x] Checks for pending utterances before allowing tool execution
-  - [x] Blocks tool execution if utterances are pending
+- [x] ~~Implement pre-tool use hook script~~ (removed)
+  - [x] ~~Checks for pending utterances before allowing tool execution~~ 
+  - [x] ~~Blocks tool execution if utterances are pending~~
   - [x] Forces Claude to use `dequeue_utterances` tool first
 - [x] Hook provides clear feedback about pending utterance count
 
@@ -403,7 +403,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
    {
      "hooks": {
        "Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "sh ~/.mcp-voice-hooks/hooks/stop-hook.sh"}]}],
-       "PreToolUse": [{"matcher": "^(?!mcp__voice-hooks__).*", "hooks": [{"type": "command", "command": "sh ~/.mcp-voice-hooks/hooks/pre-tool-hook.sh"}]}]
+       // PreToolUse hook removed
      }
    }
    ```

@@ -13,17 +13,6 @@ describe('Hook Management', () => {
         ],
       },
     ],
-    PreToolUse: [
-      {
-        matcher: '^(?!mcp__voice-hooks__).*',
-        hooks: [
-          {
-            type: 'command',
-            command: 'curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool" || echo \'{"decision": "approve", "reason": "voice-hooks unavailable"}\'',
-          },
-        ],
-      },
-    ],
   };
 
   describe('removeVoiceHooks', () => {
@@ -132,9 +121,7 @@ describe('Hook Management', () => {
       expect(result.Stop[0].hooks[0].command).toBe('custom-stop.sh');
       expect(result.Stop[1].hooks[0].command).toBe('curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks unavailable"}\'');
       
-      // Should have the new PreToolUse hook
-      expect(result.PreToolUse).toHaveLength(1);
-      expect(result.PreToolUse[0].hooks[0].command).toBe('curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool" || echo \'{"decision": "approve", "reason": "voice-hooks unavailable"}\'');
+      // PreToolUse hook has been removed
     });
 
     it('should add voice hooks when no existing hooks', () => {
@@ -182,8 +169,7 @@ describe('Hook Management', () => {
       // Should preserve PostToolUse
       expect(result.PostToolUse).toEqual(existing.PostToolUse);
       
-      // Should add PreToolUse
-      expect(result.PreToolUse).toEqual(voiceHooks.PreToolUse);
+      // PreToolUse hook has been removed
     });
 
     it('should not modify original objects', () => {
@@ -241,11 +227,11 @@ describe('Hook Management', () => {
     it('should return true for reordered hook types', () => {
       const hooks1: HookSettings = {
         Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'stop.sh' }] }],
-        PreToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'pre.sh' }] }],
+        PostToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'post.sh' }] }],
       };
       
       const hooks2: HookSettings = {
-        PreToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'pre.sh' }] }],
+        PostToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'post.sh' }] }],
         Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'stop.sh' }] }],
       };
       
