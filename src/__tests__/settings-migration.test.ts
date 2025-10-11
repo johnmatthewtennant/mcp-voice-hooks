@@ -50,7 +50,7 @@ describe('Settings Migration', () => {
             matcher: "",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }],
           PreToolUse: [{
@@ -63,7 +63,7 @@ describe('Settings Migration', () => {
             matcher: "^(?!mcp__voice-hooks__).*",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }]
         }
@@ -97,7 +97,7 @@ describe('Settings Migration', () => {
             matcher: "",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }],
           PreToolUse: [{
@@ -110,7 +110,7 @@ describe('Settings Migration', () => {
             matcher: "^(?!mcp__voice-hooks__).*",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }]
         }
@@ -151,7 +151,7 @@ describe('Settings Migration', () => {
       // Check that settings were updated
       const updatedSettings = JSON.parse(fs.readFileSync(settingsLocalPath, 'utf8'));
       expect(updatedSettings.env.PORT).toBe("3000"); // Preserved
-      expect(updatedSettings.hooks.Stop[0].hooks[0].command).toContain("voice-hooks unavailable"); // Updated to new version
+      expect(updatedSettings.hooks.Stop[0].hooks[0].command).toContain("voice-hooks not running"); // Updated to new version
       expect(updatedSettings.hooks.PreToolUse).toBeDefined(); // Added
       expect(updatedSettings.hooks.PostToolUse).toBeDefined(); // Added
     });
@@ -161,7 +161,7 @@ describe('Settings Migration', () => {
     it('should remove hooks from both settings files', () => {
       // Create both settings files with voice hooks
       fs.mkdirSync(claudeDir, { recursive: true });
-      
+
       // settings.json with voice hooks
       const settings = {
         hooks: {
@@ -169,7 +169,7 @@ describe('Settings Migration', () => {
             matcher: "",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }]
         }
@@ -184,14 +184,14 @@ describe('Settings Migration', () => {
             matcher: "",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }],
           PreToolUse: [{
             matcher: "^(?!mcp__voice-hooks__).*",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }]
         }
@@ -212,9 +212,9 @@ describe('Settings Migration', () => {
 
     it('should handle missing settings files gracefully', () => {
       // Run uninstall without any settings files
-      const output = execSync(`node ${cliPath} uninstall`, { 
+      const output = execSync(`node ${cliPath} uninstall`, {
         cwd: testDir,
-        encoding: 'utf8' 
+        encoding: 'utf8'
       });
 
       // Should complete without errors
@@ -237,14 +237,14 @@ describe('Settings Migration', () => {
             matcher: "^(?!mcp__voice-hooks__).*",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-tool\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }],
           Stop: [{
             matcher: "",
             hooks: [{
               type: "command",
-              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+              command: "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
             }]
           }]
         }

@@ -8,7 +8,7 @@ describe('Hook Management', () => {
         hooks: [
           {
             type: 'command',
-            command: 'curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks unavailable"}\'',
+            command: 'curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks not running"}\'',
           },
         ],
       },
@@ -24,7 +24,7 @@ describe('Hook Management', () => {
             hooks: [
               {
                 type: 'command',
-                command: 'curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks unavailable"}\'',
+                command: 'curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks not running"}\'',
               },
             ],
           },
@@ -41,7 +41,7 @@ describe('Hook Management', () => {
       };
 
       const result = removeVoiceHooks(existing);
-      
+
       expect(result.Stop).toHaveLength(1);
       expect(result.Stop[0].hooks[0].command).toBe('custom-stop.sh');
     });
@@ -54,7 +54,7 @@ describe('Hook Management', () => {
             hooks: [
               {
                 type: 'command',
-                command: 'curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks unavailable"}\'',
+                command: 'curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks not running"}\'',
               },
             ],
           },
@@ -73,7 +73,7 @@ describe('Hook Management', () => {
       };
 
       const result = removeVoiceHooks(existing);
-      
+
       expect(result.Stop).toBeUndefined();
       expect(result.PreToolUse).toHaveLength(1);
     });
@@ -115,12 +115,12 @@ describe('Hook Management', () => {
       };
 
       const result = replaceVoiceHooks(existing, voiceHooks);
-      
+
       // Should have 2 Stop hooks: custom + new voice hook
       expect(result.Stop).toHaveLength(2);
       expect(result.Stop[0].hooks[0].command).toBe('custom-stop.sh');
-      expect(result.Stop[1].hooks[0].command).toBe('curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks unavailable"}\'');
-      
+      expect(result.Stop[1].hooks[0].command).toBe('curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop" || echo \'{"decision": "approve", "reason": "voice-hooks not running"}\'');
+
       // PreToolUse hook has been removed
     });
 
@@ -160,15 +160,15 @@ describe('Hook Management', () => {
       };
 
       const result = replaceVoiceHooks(existing, voiceHooks);
-      
+
       // Should preserve custom Stop hook and add voice Stop hook
       expect(result.Stop).toHaveLength(2);
       expect(result.Stop[0].matcher).toBe('custom');
       expect(result.Stop[0].hooks).toHaveLength(2);
-      
+
       // Should preserve PostToolUse
       expect(result.PostToolUse).toEqual(existing.PostToolUse);
-      
+
       // PreToolUse hook has been removed
     });
 
@@ -181,12 +181,12 @@ describe('Hook Management', () => {
           },
         ],
       };
-      
+
       const existingCopy = JSON.parse(JSON.stringify(existing));
       const voiceHooksCopy = JSON.parse(JSON.stringify(voiceHooks));
-      
+
       replaceVoiceHooks(existing, voiceHooks);
-      
+
       expect(existing).toEqual(existingCopy);
       expect(voiceHooks).toEqual(voiceHooksCopy);
     });
@@ -202,7 +202,7 @@ describe('Hook Management', () => {
           },
         ],
       };
-      
+
       expect(areHooksEqual(hooks, hooks)).toBe(true);
     });
 
@@ -213,14 +213,14 @@ describe('Hook Management', () => {
           { matcher: 'B', hooks: [{ type: 'command', command: 'b.sh' }] },
         ],
       };
-      
+
       const hooks2: HookSettings = {
         Stop: [
           { matcher: 'B', hooks: [{ type: 'command', command: 'b.sh' }] },
           { matcher: 'A', hooks: [{ type: 'command', command: 'a.sh' }] },
         ],
       };
-      
+
       expect(areHooksEqual(hooks1, hooks2)).toBe(true);
     });
 
@@ -229,12 +229,12 @@ describe('Hook Management', () => {
         Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'stop.sh' }] }],
         PostToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'post.sh' }] }],
       };
-      
+
       const hooks2: HookSettings = {
         PostToolUse: [{ matcher: '', hooks: [{ type: 'command', command: 'post.sh' }] }],
         Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'stop.sh' }] }],
       };
-      
+
       expect(areHooksEqual(hooks1, hooks2)).toBe(true);
     });
 
@@ -242,11 +242,11 @@ describe('Hook Management', () => {
       const hooks1: HookSettings = {
         Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'stop1.sh' }] }],
       };
-      
+
       const hooks2: HookSettings = {
         Stop: [{ matcher: '', hooks: [{ type: 'command', command: 'stop2.sh' }] }],
       };
-      
+
       expect(areHooksEqual(hooks1, hooks2)).toBe(false);
     });
 
@@ -256,14 +256,14 @@ describe('Hook Management', () => {
           { matcher: 'A', hooks: [{ type: 'command', command: 'a.sh' }] },
         ],
       };
-      
+
       const hooks2: HookSettings = {
         Stop: [
           { matcher: 'A', hooks: [{ type: 'command', command: 'a.sh' }] },
           { matcher: 'B', hooks: [{ type: 'command', command: 'b.sh' }] },
         ],
       };
-      
+
       expect(areHooksEqual(hooks1, hooks2)).toBe(false);
     });
 

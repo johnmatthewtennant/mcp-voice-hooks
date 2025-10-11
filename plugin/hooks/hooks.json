@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-speak\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-speak\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
           }
         ]
       },
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-wait\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
+            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-wait\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks not running\"}'"
           }
         ]
       }
