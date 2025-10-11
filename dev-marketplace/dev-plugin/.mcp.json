@@ -6,7 +6,9 @@
         "mcp-voice-hooks",
         "--skip-hooks"
       ],
-      "env": {}
+      "env": {
+        "MCP_VOICE_HOOKS_PORT": "5110"
+      }
     }
   }
 }
