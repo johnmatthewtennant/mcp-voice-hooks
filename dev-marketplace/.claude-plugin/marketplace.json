@@ -1,0 +1,13 @@
+{
+  "name": "mcp-voice-hooks-dev-marketplace",
+  "owner": {
+    "name": "Local Dev"
+  },
+  "plugins": [
+    {
+      "name": "mcp-voice-hooks-dev-plugin",
+      "source": "./dev-plugin",
+      "description": "Development version of mcp-voice-hooks plugin (uses npm link)"
+    }
+  ]
+}

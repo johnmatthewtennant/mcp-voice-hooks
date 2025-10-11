@@ -1,5 +1,5 @@
 {
-  "name": "mcp-voice-hooks",
+  "name": "mcp-voice-hooks-plugin",
   "version": "1.0.30",
   "description": "Real-time voice interaction for Claude Code. Speak naturally while Claude works - interrupt, redirect, or provide continuous feedback without stopping.",
   "author": {
