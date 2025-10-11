@@ -1,6 +1,6 @@
 {
   "name": "mcp-voice-hooks",
-  "version": "1.0.30",
+  "version": "1.0.31",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
