@@ -16,17 +16,28 @@ Voice recognition and text-to-speech are handled by the browser, so there is not
 
 ## Installation
 
-Installation is easy.
+There are two ways to install Voice Mode for Claude Code:
 
-### 1. Install Claude Code
+### Method 1: Plugin Installation (Recommended)
+
+The easiest way to install is using Claude Code's plugin system:
 
 ```bash
-npm install -g @anthropic-ai/claude-code
+# Add the marketplace
+claude plugin marketplace add johnmatthewtennant/mcp-voice-hooks
+
+# Install the plugin
+claude plugin install mcp-voice-hooks@mcp-voice-hooks
 ```
 
-### 2. Install Voice Mode
+That's it! The plugin automatically configures both the MCP server and hooks.
+
+### Method 2: Manual Installation (Legacy)
+
+If you prefer manual installation or need more control:
 
 ```bash
+# Install hooks and configure MCP server
 npx mcp-voice-hooks@latest install-hooks
 claude mcp add voice-hooks npx mcp-voice-hooks@latest
 ```
@@ -96,20 +107,23 @@ This will configure your project's `.claude/settings.local.json` with the necess
 
 ## Uninstallation
 
-To completely remove MCP Voice Hooks:
+### If installed via Plugin (Method 1)
+
+```bash
+claude plugin uninstall mcp-voice-hooks@mcp-voice-hooks
+```
+
+### If installed manually (Method 2)
 
 ```bash
 # Remove from Claude MCP servers
 claude mcp remove voice-hooks
-```
 
-```bash
 # Also remove hooks and settings
 npx mcp-voice-hooks uninstall
 ```
 
-This will:
-
+Both methods will:
 - Clean up voice hooks from your project's `.claude/settings.local.json`
 - Preserve any custom hooks you've added
 
@@ -141,6 +155,21 @@ claude
 - After making changes to **TypeScript files** (`src/*.ts`), you must run `npm run build`
 - For changes to **browser files** (`public/*`), just restart Claude Code
 - Then restart Claude Code to use the updated code
+
+### Plugin Directory Structure
+
+```
+mcp-voice-hooks/
+├── .claude-plugin/
+│   └── marketplace.json          # Points to ./plugin
+├── .mcp.json                      # Local dev (no @latest, works with npm link)
+└── plugin/                        # Plugin distribution
+    ├── .claude-plugin/
+    │   └── plugin.json            # Plugin manifest
+    ├── hooks/
+    │   └── hooks.json             # Single source of truth for hooks
+    └── .mcp.json                  # Plugin users (with @latest)
+```
 
 ### Configuration
 

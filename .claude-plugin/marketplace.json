@@ -1,0 +1,13 @@
+{
+  "name": "mcp-voice-hooks",
+  "owner": {
+    "name": "John Matthew Tennant"
+  },
+  "plugins": [
+    {
+      "name": "mcp-voice-hooks",
+      "source": "./plugin",
+      "description": "Real-time voice interaction for Claude Code. Speak naturally while Claude works - interrupt, redirect, or provide continuous feedback without stopping."
+    }
+  ]
+}

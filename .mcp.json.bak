@@ -1,7 +1,6 @@
 {
   "mcpServers": {
     "voice-hooks": {
-      "type": "stdio",
       "command": "npx",
       "args": [
         "mcp-voice-hooks"

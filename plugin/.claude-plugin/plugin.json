@@ -1,0 +1,21 @@
+{
+  "name": "mcp-voice-hooks",
+  "version": "1.0.30",
+  "description": "Real-time voice interaction for Claude Code. Speak naturally while Claude works - interrupt, redirect, or provide continuous feedback without stopping.",
+  "author": {
+    "name": "John Matthew Tennant",
+    "url": "https://github.com/johnmatthewtennant"
+  },
+  "homepage": "https://github.com/johnmatthewtennant/mcp-voice-hooks#readme",
+  "repository": "https://github.com/johnmatthewtennant/mcp-voice-hooks",
+  "license": "UNLICENSED",
+  "keywords": [
+    "voice",
+    "speech-recognition",
+    "mcp",
+    "claude-code",
+    "voice-control",
+    "dictation",
+    "speech-to-text"
+  ]
+}

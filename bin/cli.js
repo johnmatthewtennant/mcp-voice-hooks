@@ -35,8 +35,14 @@ async function main() {
       // Default behavior: ensure hooks are installed/updated, then run the MCP server
       console.log('🎤 MCP Voice Hooks - Starting server...');
 
-      // Auto-install/update hooks on every startup
-      await ensureHooksInstalled();
+      // Skip hook installation if --skip-hooks flag is present (used by plugin mode)
+      const skipHooks = args.includes('--skip-hooks');
+      if (!skipHooks) {
+        // Auto-install/update hooks on every startup
+        await ensureHooksInstalled();
+      } else {
+        console.log('ℹ️  Skipping hook installation (plugin mode)');
+      }
 
       console.log('');
       await runMCPServer();
@@ -102,51 +108,10 @@ async function configureClaudeCodeSettings() {
     }
   }
 
-  // Add hook configuration with inline commands
-  const hookConfig = {
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "^mcp__voice-hooks__speak$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-speak\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
-          }
-        ]
-      },
-      {
-        "matcher": "^mcp__voice-hooks__wait_for_utterance$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-wait\" || echo '{\"decision\": \"approve\", \"reason\": \"voice-hooks unavailable\"}'"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "^(?!mcp__voice-hooks__).*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/post-tool\" || echo '{}'"
-          }
-        ]
-      }
-    ]
-  };
+  // Load hook configuration from plugin/hooks/hooks.json
+  const hooksJsonPath = path.join(__dirname, '..', 'plugin', 'hooks', 'hooks.json');
+  const hooksJson = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
+  const hookConfig = hooksJson.hooks;
 
   // Replace voice hooks intelligently
   const updatedHooks = replaceVoiceHooks(settings.hooks || {}, hookConfig);
