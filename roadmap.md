@@ -51,6 +51,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
   - [ ] Remove MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT environment variable
   - [ ] Simplify code by removing manual mode - always use auto-delivery
   - [ ] Update documentation to reflect simplified architecture
+- [x] add plugin installation instructions to the readme
 
 ### OpenAI Integration (Enhanced Mobile Support)
 

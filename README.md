@@ -168,6 +168,7 @@ The default port is 5111. To use a different port, set the `MCP_VOICE_HOOKS_PORT
 ```
 
 This environment variable is used by both:
+
 - The MCP server to determine which port to listen on
 - The Claude Code hooks to connect to the correct port
 
@@ -209,3 +210,25 @@ When auto-delivery is disabled:
 - Hooks no longer automatically process voice input
 - Claude will be blocked from making tool calls until it manually dequeues voice input
 - This mode is useful for debugging or when you want manual control
+
+## Experimental: Alternate Installation Method - Plugin mode
+
+Simply add the following to your project's `.claude/settings.local.json` and restart Claude Code:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "mcp-voice-hooks-marketplace": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/johnmatthewtennant/mcp-voice-hooks.git"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "mcp-voice-hooks-plugin@mcp-voice-hooks-marketplace": true
+  }
+}
+```
+
+set `enabled` to `false` if you want to temporarily disable the plugin.
