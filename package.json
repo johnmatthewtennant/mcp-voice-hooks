@@ -20,7 +20,8 @@
     "start": "node dist/index.js",
     "test": "jest",
     "test:watch": "jest --watch",
-    "prepare": "husky"
+    "prepare": "husky",
+    "version": "node scripts/sync-plugin-version.cjs && git add plugin/.claude-plugin/plugin.json dev-marketplace/dev-plugin/.claude-plugin/plugin.json"
   },
   "description": "Real-time voice interaction for Claude Code. Speak naturally while Claude works - interrupt, redirect, or provide continuous feedback without stopping.",
   "keywords": [
