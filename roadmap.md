@@ -40,7 +40,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [ ] add a note to the pre-speak hook that the voice response was not delivered because the assistant needs to read the new utterances first
 - [x] find the mcp-proxy logic and fix it or remove it from the readme
 - [ ] clean up unused code (index.ts?)
-- [ ] convert DEBUG environment variable to --debug CLI argument for better developer experience
+- [x] convert DEBUG environment variable to --debug CLI argument for better developer experience
 - [ ] consider using suppressOutput for the hooks. Maybe just the stop hook and the pre-speak hook <https://docs.anthropic.com/en/docs/claude-code/hooks#common-json-fields>
 - [x] add pre-tool hook to automatically approve Speak tool. (so user doesn't have to manually approve & add to allowlist)
 - [x] add a development plugin marketplace and a development mcp.json separate from the main marketplace and plugin
