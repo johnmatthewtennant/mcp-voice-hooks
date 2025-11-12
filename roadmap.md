@@ -40,9 +40,9 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [ ] add a note to the pre-speak hook that the voice response was not delivered because the assistant needs to read the new utterances first
 - [x] find the mcp-proxy logic and fix it or remove it from the readme
 - [ ] clean up unused code (index.ts?)
-- [ ] switch to using command line arguments for the configuration (except for the port becuase we need to reference that in the hooks)
+- [ ] convert DEBUG environment variable to --debug CLI argument for better developer experience
 - [ ] consider using suppressOutput for the hooks. Maybe just the stop hook and the pre-speak hook <https://docs.anthropic.com/en/docs/claude-code/hooks#common-json-fields>
-- [ ] add pre-tool hook to automatically approve Speak tool. (so user doesn't have to manually approve & add to allowlist)
+- [x] add pre-tool hook to automatically approve Speak tool. (so user doesn't have to manually approve & add to allowlist)
 - [x] add a development plugin marketplace and a development mcp.json separate from the main marketplace and plugin
 - [x] Create CONTRIBUTING.md with instructions for local plugin development workflow
 - [x] Remove wait_for_utterance tool and associated hooks
@@ -52,6 +52,11 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
   - [x] Simplify code by removing manual mode - always use auto-delivery
   - [x] Update documentation to reflect simplified architecture
 - [x] add plugin installation instructions to the readme
+- [ ] Countdown timer on the frontend when Claude is waiting
+- [ ] Configurable timeout on the frontend
+  - [ ] need to determine the max timeout allowed by default by claude code, If we want to allow longer timeouts, the user will need to adjust the timeout in the claude settings.
+  - [ ] maybe we can read that timeout from the claude code settings to determine the max timeout allowed by the server and in the UI
+  - [ ] we could even adjust the timeout in claude code settings using the UI but the user would need to restart claude code to apply the new timeout
 
 ### OpenAI Integration (Enhanced Mobile Support)
 
@@ -115,7 +120,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
   - [x] add a config option to hide the tools and enable auto-wait and auto-dequeue
 - [ ] ~~Make the "must speak" stop hook text more consistent with the pre-tool-auto-dequeue and auto-wait text about voice input being active~~ (Pre-tool hook removed)
 - [ ] Investigate if we can show and hide MCP tools live without restarting claude code (e.g. hide SPEAK if voice responses are disabled)
-- [ ] MVP
+- [x] MVP
   - [x] add a warning when adjusting rate for google voices that the google voices don't work well with speech rate
   - [x] link to readme for info on system voice settings
   - [x] hide, label, or separate low quality voices
@@ -179,7 +184,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
   - [x] remove the MCP_VOICE_RESPONSES_ENABLED environment variable and switch all references to it to --speak
   - [x] update the readme to reflect the new CLI argument
 - [x] Investigate hiding the speak mcp tools when voice responses are disabled
-- [ ] ~~Investigate consolidating the pre-tool hook, pre-speak hook, and pre-wait hook into a single hook that runs before all tools and checks which tool is being used and switches logic based on that~~ (Pre-tool hook removed)
+- [x] ~~Investigate consolidating the pre-tool hook, pre-speak hook, and pre-wait hook into a single hook that runs before all tools and checks which tool is being used and switches logic based on that~~ (Pre-tool hook removed)
 - [x] Improve conversation flow by tracking tool usage ✅ **COMPLETED**
   - [x] Remove speak_and_then_wait_for_utterance tool (use separate speak and wait_for_utterance instead)
   - [x] Track timestamp of last approved tool use

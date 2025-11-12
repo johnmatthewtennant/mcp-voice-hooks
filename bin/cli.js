@@ -148,8 +148,15 @@ async function ensureHooksInstalled() {
 async function runMCPServer() {
   const serverPath = path.join(__dirname, '..', 'dist', 'unified-server.js');
 
+  // Build server arguments
+  const serverArgs = ['--mcp-managed'];
+  const args = process.argv.slice(2);
+  if (args.includes('--debug') || args.includes('-d')) {
+    serverArgs.push('--debug');
+  }
+
   // Run the compiled JavaScript server
-  const child = spawn('node', [serverPath, '--mcp-managed'], {
+  const child = spawn('node', [serverPath, ...serverArgs], {
     stdio: 'inherit',
     cwd: path.join(__dirname, '..')
   });
