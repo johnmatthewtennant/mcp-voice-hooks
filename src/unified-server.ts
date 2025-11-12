@@ -22,7 +22,6 @@ const __dirname = path.dirname(__filename);
 // Constants
 const WAIT_TIMEOUT_SECONDS = 60;
 const HTTP_PORT = process.env.MCP_VOICE_HOOKS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_PORT) : 5111;
-const AUTO_DELIVER_VOICE_INPUT = process.env.MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT !== 'false'; // Default to true (auto-deliver enabled)
 
 // Promisified exec for async/await
 const execAsync = promisify(exec);
@@ -357,32 +356,24 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 });
 
 // Unified hook handler
-function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'wait' | 'stop' | 'post-tool'): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
+function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool'): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
   const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
   const voiceInputActive = voicePreferences.voiceInputActive;
 
-  // 1. Check for pending utterances (different behavior based on action and settings)
+  // 1. Check for pending utterances and auto-dequeue
   if (voiceInputActive) {
     const pendingUtterances = queue.utterances.filter(u => u.status === 'pending');
     if (pendingUtterances.length > 0) {
-      if (AUTO_DELIVER_VOICE_INPUT) {
-        // Auto mode: auto-dequeue for all actions
-        const dequeueResult = dequeueUtterancesCore();
+      // Auto-dequeue for all actions
+      const dequeueResult = dequeueUtterancesCore();
 
-        if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
-          // Reverse to show oldest first
-          const reversedUtterances = dequeueResult.utterances.reverse();
+      if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
+        // Reverse to show oldest first
+        const reversedUtterances = dequeueResult.utterances.reverse();
 
-          return {
-            decision: 'block',
-            reason: formatVoiceUtterances(reversedUtterances)
-          };
-        }
-      } else {
-        // Manual mode: always block and tell assistant to use dequeue_utterances tool
         return {
           decision: 'block',
-          reason: `${pendingUtterances.length} pending utterance(s) available. Use the dequeue_utterances tool to retrieve them.`
+          reason: formatVoiceUtterances(reversedUtterances)
         };
       }
     }
@@ -409,24 +400,12 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'wait' | 'stop' |
     return { decision: 'approve' };
   }
 
-  // 4. Handle wait for utterance
-  if (attemptedAction === 'wait') {
-    if (voiceResponsesEnabled && lastToolUseTimestamp &&
-      (!lastSpeakTimestamp || lastSpeakTimestamp < lastToolUseTimestamp)) {
-      return {
-        decision: 'block',
-        reason: 'Assistant must speak after using tools. Please use the speak tool to respond before waiting for utterances.'
-      };
-    }
-    return { decision: 'approve' };
-  }
-
-  // 5. Handle speak
+  // 4. Handle speak
   if (attemptedAction === 'speak') {
     return { decision: 'approve' };
   }
 
-  // 6. Handle stop
+  // 5. Handle stop
   if (attemptedAction === 'stop') {
     // Check if must speak after tool use
     if (voiceResponsesEnabled && lastToolUseTimestamp &&
@@ -437,53 +416,44 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'wait' | 'stop' |
       };
     }
 
-    // Check if should wait for utterances (only if voice input is active)
+    // Auto-wait for utterances (only if voice input is active)
     if (voiceInputActive) {
-      if (AUTO_DELIVER_VOICE_INPUT) {
-        // Auto-wait for utterances
-        return (async () => {
-          try {
-            debugLog(`[Stop Hook] Auto-calling wait_for_utterance...`);
-            const data = await waitForUtteranceCore();
-            debugLog(`[Stop Hook] wait_for_utterance response: ${JSON.stringify(data)}`);
+      return (async () => {
+        try {
+          debugLog(`[Stop Hook] Auto-calling wait_for_utterance...`);
+          const data = await waitForUtteranceCore();
+          debugLog(`[Stop Hook] wait_for_utterance response: ${JSON.stringify(data)}`);
 
-            // If error (voice input not active), treat as no utterances found
-            if (!data.success && data.error) {
-              return {
-                decision: 'approve' as const,
-                reason: data.error
-              };
-            }
-
-            // If utterances were found, block and return them
-            if (data.utterances && data.utterances.length > 0) {
-              return {
-                decision: 'block' as const,
-                reason: formatVoiceUtterances(data.utterances)
-              };
-            }
-
-            // If no utterances found (including when voice was deactivated), approve stop
+          // If error (voice input not active), treat as no utterances found
+          if (!data.success && data.error) {
             return {
               decision: 'approve' as const,
-              reason: data.message || 'No utterances found during wait'
-            };
-          } catch (error) {
-            debugLog(`[Stop Hook] Error calling wait_for_utterance: ${error}`);
-            // In auto-deliver mode, fail open on errors
-            return {
-              decision: 'approve' as const,
-              reason: 'Auto-wait encountered an error, proceeding'
+              reason: data.error
             };
           }
-        })();
-      } else {
-        // Manual mode: block and tell assistant to use wait_for_utterance tool
-        return {
-          decision: 'block',
-          reason: 'Assistant tried to end its response, but voice input is active. Stopping is not allowed without first checking for voice input. Assistant should now use wait_for_utterance to check for voice input'
-        };
-      }
+
+          // If utterances were found, block and return them
+          if (data.utterances && data.utterances.length > 0) {
+            return {
+              decision: 'block' as const,
+              reason: formatVoiceUtterances(data.utterances)
+            };
+          }
+
+          // If no utterances found (including when voice was deactivated), approve stop
+          return {
+            decision: 'approve' as const,
+            reason: data.message || 'No utterances found during wait'
+          };
+        } catch (error) {
+          debugLog(`[Stop Hook] Error calling wait_for_utterance: ${error}`);
+          // Fail open on errors
+          return {
+            decision: 'approve' as const,
+            reason: 'Auto-wait encountered an error, proceeding'
+          };
+        }
+      })();
     }
 
     return {
@@ -505,12 +475,6 @@ app.post('/api/hooks/stop', async (_req: Request, res: Response) => {
 // Pre-speak hook endpoint
 app.post('/api/hooks/pre-speak', (_req: Request, res: Response) => {
   const result = handleHookRequest('speak');
-  res.json(result);
-});
-
-// Pre-wait hook endpoint
-app.post('/api/hooks/pre-wait', (_req: Request, res: Response) => {
-  const result = handleHookRequest('wait');
   res.json(result);
 });
 
@@ -708,12 +672,10 @@ app.listen(HTTP_PORT, async () => {
   if (!IS_MCP_MANAGED) {
     console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
     console.log(`[Mode] Running in ${IS_MCP_MANAGED ? 'MCP-managed' : 'standalone'} mode`);
-    console.log(`[Auto-deliver] Voice input auto-delivery is ${AUTO_DELIVER_VOICE_INPUT ? 'enabled (tools hidden)' : 'disabled (tools shown)'}`);
   } else {
     // In MCP mode, write to stderr to avoid interfering with protocol
     console.error(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
     console.error(`[Mode] Running in MCP-managed mode`);
-    console.error(`[Auto-deliver] Voice input auto-delivery is ${AUTO_DELIVER_VOICE_INPUT ? 'enabled (tools hidden)' : 'disabled (tools shown)'}`);
   }
 
   // Auto-open browser if no frontend connects within 3 seconds
@@ -762,144 +724,31 @@ if (IS_MCP_MANAGED) {
 
   // Tool handlers
   mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = [];
-
-    // Only show dequeue_utterances and wait_for_utterance if auto-deliver is disabled
-    if (!AUTO_DELIVER_VOICE_INPUT) {
-      tools.push(
+    // Only expose the speak tool - voice input is auto-delivered via hooks
+    return {
+      tools: [
         {
-          name: 'dequeue_utterances',
-          description: 'Dequeue pending utterances and mark them as delivered',
+          name: 'speak',
+          description: 'Speak text using text-to-speech and mark delivered utterances as responded',
           inputSchema: {
             type: 'object',
-            properties: {},
-          },
-        },
-        {
-          name: 'wait_for_utterance',
-          description: 'Wait for an utterance to be available or until timeout',
-          inputSchema: {
-            type: 'object',
-            properties: {},
+            properties: {
+              text: {
+                type: 'string',
+                description: 'The text to speak',
+              },
+            },
+            required: ['text'],
           },
         }
-      );
-    }
-
-    // Always show the speak tool
-    tools.push({
-      name: 'speak',
-      description: 'Speak text using text-to-speech and mark delivered utterances as responded',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          text: {
-            type: 'string',
-            description: 'The text to speak',
-          },
-        },
-        required: ['text'],
-      },
-    });
-
-    return { tools };
+      ]
+    };
   });
 
   mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
 
     try {
-      if (name === 'dequeue_utterances') {
-        const response = await fetch(`http://localhost:${HTTP_PORT}/api/dequeue-utterances`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-
-        const data = await response.json() as any;
-
-        // Check if the request was successful
-        if (!response.ok) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Error: ${data.error || 'Failed to dequeue utterances'}`,
-              },
-            ],
-          };
-        }
-
-        if (data.utterances.length === 0) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'No recent utterances found.',
-              },
-            ],
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Dequeued ${data.utterances.length} utterance(s):\n\n${data.utterances.reverse().map((u: any) => `"${u.text}"\t[time: ${new Date(u.timestamp).toISOString()}]`).join('\n')
-                }${getVoiceResponseReminder()}`,
-            },
-          ],
-        };
-      }
-
-      if (name === 'wait_for_utterance') {
-        debugLog(`[MCP] Calling wait_for_utterance`);
-
-        const response = await fetch(`http://localhost:${HTTP_PORT}/api/wait-for-utterances`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-
-        const data = await response.json() as any;
-
-        // Check if the request was successful
-        if (!response.ok) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Error: ${data.error || 'Failed to wait for utterances'}`,
-              },
-            ],
-          };
-        }
-
-        if (data.utterances && data.utterances.length > 0) {
-          const utteranceTexts = data.utterances
-            .map((u: any) => `[${u.timestamp}] "${u.text}"`)
-            .join('\n');
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Found ${data.count} utterance(s):\n\n${utteranceTexts}${getVoiceResponseReminder()}`,
-              },
-            ],
-          };
-        } else {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: data.message || `No utterances found. Timed out.`,
-              },
-            ],
-          };
-        }
-      }
-
       if (name === 'speak') {
         const text = args?.text as string;
 

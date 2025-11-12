@@ -44,13 +44,13 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 - [ ] consider using suppressOutput for the hooks. Maybe just the stop hook and the pre-speak hook <https://docs.anthropic.com/en/docs/claude-code/hooks#common-json-fields>
 - [ ] add pre-tool hook to automatically approve Speak tool. (so user doesn't have to manually approve & add to allowlist)
 - [x] add a development plugin marketplace and a development mcp.json separate from the main marketplace and plugin
-- [ ] Create CONTRIBUTING.md with instructions for local plugin development workflow
-- [ ] Remove wait_for_utterance tool and associated hooks
-  - [ ] Remove wait_for_utterance MCP tool
-  - [ ] Remove pre-wait hook configuration
-  - [ ] Remove MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT environment variable
-  - [ ] Simplify code by removing manual mode - always use auto-delivery
-  - [ ] Update documentation to reflect simplified architecture
+- [x] Create CONTRIBUTING.md with instructions for local plugin development workflow
+- [x] Remove wait_for_utterance tool and associated hooks
+  - [x] Remove wait_for_utterance MCP tool
+  - [x] Remove pre-wait hook configuration
+  - [x] Remove MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT environment variable
+  - [x] Simplify code by removing manual mode - always use auto-delivery
+  - [x] Update documentation to reflect simplified architecture
 - [x] add plugin installation instructions to the readme
 
 ### OpenAI Integration (Enhanced Mobile Support)

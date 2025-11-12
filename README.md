@@ -157,31 +157,6 @@ When running in MCP-managed mode, the browser will automatically open if no fron
 }
 ```
 
-#### Auto-Deliver Voice Input (Default)
-
-By default, mcp-voice-hooks automatically delivers voice input to Claude after tool use, before speaking, and before stopping:
-
-- The `dequeue_utterances` and `wait_for_utterance` MCP tools are hidden from Claude
-- Voice input is automatically delivered when Claude performs any action
-- Claude receives voice input naturally without needing to explicitly call mcp-voice-hooks tools
-
-To disable auto-delivery:
-
-```json
-{
-  "env": {
-    "MCP_VOICE_HOOKS_AUTO_DELIVER_VOICE_INPUT": "false"
-  }
-}
-```
-
-When auto-delivery is disabled:
-
-- The `dequeue_utterances` and `wait_for_utterance` tools become visible
-- Hooks no longer automatically process voice input
-- Claude will be blocked from making tool calls until it manually dequeues voice input
-- This mode is useful for debugging or when you want manual control
-
 ## Experimental: Alternate Installation Method - Plugin mode
 
 Simply add the following to your project's `.claude/settings.local.json` and restart Claude Code:
