@@ -1,6 +1,6 @@
 {
   "name": "mcp-voice-hooks-dev-plugin",
-  "version": "1.0.36",
+  "version": "1.0.37",
   "description": "Development version of mcp-voice-hooks (uses npm link)",
   "author": {
     "name": "John Matthew Tennant",
