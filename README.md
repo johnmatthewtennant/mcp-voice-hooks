@@ -49,6 +49,17 @@ Click "Start Listening"
 
 Say something to Claude. You will need to send one message in the Claude Code CLI to start the conversation.
 
+### 4. Trigger Word Mode (Optional)
+
+By default, utterances are sent automatically when you pause. You can switch to "Wait for Trigger Word" mode in the browser interface:
+
+1. Toggle to "Wait for Trigger Word" mode
+2. Enter a trigger word (e.g., "send", "claude", "go")
+3. Speak your message(s) - they will queue up in the browser
+4. Say your trigger word to send all queued messages at once (or click "Send Now")
+
+The trigger word is case-insensitive and will be automatically removed from your message before sending.
+
 ## Browser Compatibility
 
 - ✅ **Chrome**: Full support for speech recognition, browser text-to-speech, and system text-to-speech
@@ -146,7 +157,7 @@ claude
 
 #### Port Configuration
 
-The default port is 5111. To use a different port, add to your project's `.claude/settings.local.json`:
+The default port is 5111. To use a different port, set the `MCP_VOICE_HOOKS_PORT` environment variable in your project's `.claude/settings.local.json`:
 
 ```json
 {
@@ -155,6 +166,12 @@ The default port is 5111. To use a different port, add to your project's `.claud
   }
 }
 ```
+
+This environment variable is used by both:
+- The MCP server to determine which port to listen on
+- The Claude Code hooks to connect to the correct port
+
+**Note**: Setting this in `.claude/settings.local.json` is the recommended approach. The environment variable will be available to both the MCP server process and the hook commands.
 
 #### Browser Auto-Open
 

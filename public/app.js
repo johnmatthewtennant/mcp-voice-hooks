@@ -13,6 +13,21 @@ class VoiceHooksClient {
         this.listeningIndicator = document.getElementById('listeningIndicator');
         this.interimText = document.getElementById('interimText');
 
+        // Send mode controls
+        this.sendModeAutomatic = document.getElementById('sendModeAutomatic');
+        this.sendModeWait = document.getElementById('sendModeWait');
+        this.triggerWordControls = document.getElementById('triggerWordControls');
+        this.triggerWordInput = document.getElementById('triggerWordInput');
+        this.sendNowBtn = document.getElementById('sendNowBtn');
+        this.queuedUtterancesSection = document.getElementById('queuedUtterancesSection');
+        this.queuedUtterancesList = document.getElementById('queuedUtterancesList');
+        this.queuedCount = document.getElementById('queuedCount');
+
+        // Utterance queue for wait mode
+        this.utteranceQueue = [];
+        this.sendMode = 'automatic'; // 'automatic' or 'wait'
+        this.triggerWord = '';
+
         // Speech recognition
         this.recognition = null;
         this.isListening = false;
@@ -70,8 +85,14 @@ class VoiceHooksClient {
                 const transcript = event.results[i][0].transcript;
 
                 if (event.results[i].isFinal) {
-                    // User paused - send as complete utterance
-                    this.sendVoiceUtterance(transcript);
+                    // User paused - handle based on send mode
+                    if (this.sendMode === 'automatic') {
+                        // Send immediately
+                        this.sendVoiceUtterance(transcript);
+                    } else {
+                        // Queue the utterance and check for trigger word
+                        this.queueUtterance(transcript);
+                    }
                     // Restore placeholder text
                     this.interimText.textContent = 'Start speaking and your words will appear here...';
                     this.interimText.classList.remove('active');
@@ -172,6 +193,32 @@ class VoiceHooksClient {
             localStorage.setItem('voiceResponsesEnabled', enabled);
             this.updateVoicePreferences();
             this.updateVoiceOptionsVisibility();
+        });
+
+        // Send mode listeners
+        this.sendModeAutomatic.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                this.sendMode = 'automatic';
+                this.updateSendModeUI();
+                localStorage.setItem('sendMode', 'automatic');
+            }
+        });
+
+        this.sendModeWait.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                this.sendMode = 'wait';
+                this.updateSendModeUI();
+                localStorage.setItem('sendMode', 'wait');
+            }
+        });
+
+        this.triggerWordInput.addEventListener('input', (e) => {
+            this.triggerWord = e.target.value.trim();
+            localStorage.setItem('triggerWord', this.triggerWord);
+        });
+
+        this.sendNowBtn.addEventListener('click', () => {
+            this.sendQueuedUtterances();
         });
     }
 
@@ -677,8 +724,26 @@ class VoiceHooksClient {
             this.languageSelect.value = savedLanguage;
         }
 
+        // Load send mode preferences
+        const savedSendMode = localStorage.getItem('sendMode');
+        if (savedSendMode === 'wait') {
+            this.sendMode = 'wait';
+            this.sendModeWait.checked = true;
+        } else {
+            this.sendMode = 'automatic';
+            this.sendModeAutomatic.checked = true;
+        }
+
+        // Load trigger word
+        const savedTriggerWord = localStorage.getItem('triggerWord');
+        if (savedTriggerWord) {
+            this.triggerWord = savedTriggerWord;
+            this.triggerWordInput.value = savedTriggerWord;
+        }
+
         // Update UI visibility
         this.updateVoiceOptionsVisibility();
+        this.updateSendModeUI();
 
         // Send preferences to server
         this.updateVoicePreferences();
@@ -794,6 +859,110 @@ class VoiceHooksClient {
             // Back to normal listening state
             listeningIndicatorText.textContent = 'Listening...';
             this.debugLog('Claude finished waiting');
+        }
+    }
+
+    queueUtterance(text) {
+        const trimmedText = text.trim();
+        if (!trimmedText) return;
+
+        // Check for trigger word (case-insensitive)
+        const hasTriggerWord = this.triggerWord &&
+            trimmedText.toLowerCase().includes(this.triggerWord.toLowerCase());
+
+        if (hasTriggerWord) {
+            // Remove the trigger word from the text
+            const regex = new RegExp(`\\b${this.triggerWord}\\b`, 'gi');
+            const cleanedText = trimmedText.replace(regex, '').trim();
+
+            // Add the cleaned text to the queue if it's not empty
+            if (cleanedText) {
+                this.utteranceQueue.push(cleanedText);
+            }
+
+            this.debugLog('Trigger word detected, sending queued utterances');
+            this.sendQueuedUtterances();
+        } else {
+            // Just queue it
+            this.utteranceQueue.push(trimmedText);
+            this.updateQueuedUtterancesUI();
+            this.debugLog('Queued utterance:', trimmedText);
+        }
+    }
+
+    async sendQueuedUtterances() {
+        if (this.utteranceQueue.length === 0) {
+            this.debugLog('No utterances to send');
+            return;
+        }
+
+        // Combine all queued utterances into one message
+        const combinedText = this.utteranceQueue.join(' ');
+
+        this.debugLog('Sending queued utterances:', combinedText);
+
+        try {
+            const response = await fetch(`${this.baseUrl}/api/potential-utterances`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    text: combinedText,
+                    timestamp: new Date().toISOString()
+                }),
+            });
+
+            if (response.ok) {
+                // Clear the queue after successful send
+                this.utteranceQueue = [];
+                this.updateQueuedUtterancesUI();
+                this.loadData(); // Refresh the list
+            } else {
+                const error = await response.json();
+                console.error('Error sending queued utterances:', error);
+            }
+        } catch (error) {
+            console.error('Failed to send queued utterances:', error);
+        }
+    }
+
+    updateSendModeUI() {
+        if (this.sendMode === 'wait') {
+            // Show trigger word controls and queued utterances section
+            this.triggerWordControls.style.display = 'block';
+            this.queuedUtterancesSection.style.display = 'block';
+        } else {
+            // Hide trigger word controls and queued utterances section
+            this.triggerWordControls.style.display = 'none';
+            this.queuedUtterancesSection.style.display = 'none';
+
+            // Clear queue when switching to automatic mode
+            if (this.utteranceQueue.length > 0) {
+                // Ask if user wants to send queued utterances before switching
+                if (confirm('You have queued utterances. Send them before switching to automatic mode?')) {
+                    this.sendQueuedUtterances();
+                } else {
+                    this.utteranceQueue = [];
+                }
+            }
+        }
+        this.updateQueuedUtterancesUI();
+    }
+
+    updateQueuedUtterancesUI() {
+        this.queuedCount.textContent = this.utteranceQueue.length;
+
+        if (this.utteranceQueue.length === 0) {
+            this.queuedUtterancesList.innerHTML = '<div style="color: #999; font-style: italic; font-size: 13px;">No messages queued</div>';
+        } else {
+            this.queuedUtterancesList.innerHTML = this.utteranceQueue
+                .map((utterance, index) => `
+                    <div style="padding: 6px 0; border-bottom: 1px solid #ddd; font-size: 13px;">
+                        ${index + 1}. ${this.escapeHtml(utterance)}
+                    </div>
+                `)
+                .join('');
         }
     }
 }

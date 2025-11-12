@@ -431,6 +431,44 @@
                 </div>
             </div>
 
+            <div class="send-mode-controls">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <label style="font-size: 14px; color: #666;">Send Mode:</label>
+                    <div style="display: flex; gap: 12px; align-items: center;">
+                        <label style="font-size: 14px; color: #666;">
+                            <input type="radio" name="sendMode" value="automatic" id="sendModeAutomatic" checked>
+                            Send Automatically
+                        </label>
+                        <label style="font-size: 14px; color: #666;">
+                            <input type="radio" name="sendMode" value="wait" id="sendModeWait">
+                            Wait for Trigger Word
+                        </label>
+                    </div>
+                </div>
+
+                <div id="triggerWordControls" style="display: none; margin-bottom: 16px;">
+                    <div style="display: flex; gap: 12px; align-items: center;">
+                        <label style="font-size: 14px; color: #666;">Trigger Word:</label>
+                        <input type="text" id="triggerWordInput" placeholder="e.g., send, claude, go"
+                               style="flex: 1; padding: 8px; border: 2px solid #ddd; border-radius: 6px; font-size: 14px;">
+                        <button id="sendNowBtn" style="background: #007AFF; color: white; border: none; padding: 8px 16px;
+                                border-radius: 6px; font-size: 14px; cursor: pointer;">
+                            Send Now
+                        </button>
+                    </div>
+                </div>
+
+                <div id="queuedUtterancesSection" style="display: none; margin-bottom: 16px;">
+                    <div style="font-size: 14px; color: #666; font-weight: 500; margin-bottom: 8px;">
+                        Queued Messages (<span id="queuedCount">0</span>):
+                    </div>
+                    <div id="queuedUtterancesList" style="max-height: 150px; overflow-y: auto; border: 1px solid #ddd;
+                                                           border-radius: 6px; padding: 8px; background: #f8f9fa;">
+                        <div style="color: #999; font-style: italic; font-size: 13px;">No messages queued</div>
+                    </div>
+                </div>
+            </div>
+
             <div class="interim-text" id="interimText">Start speaking and your words will appear here...</div>
         </div>
         <div class="tts-settings">
