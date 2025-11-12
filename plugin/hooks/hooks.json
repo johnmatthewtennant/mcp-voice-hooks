@@ -13,7 +13,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^(mcp__voice-hooks__speak|mcp__plugin_mcp-voice-hooks_voice-hooks__speak)$",
+        "matcher": "^(mcp__voice-hooks__speak|mcp__plugin_mcp-voice-hooks.*_voice-hooks__speak)$",
         "hooks": [
           {
             "type": "command",
@@ -22,7 +22,7 @@
         ]
       },
       {
-        "matcher": "^(mcp__voice-hooks__wait_for_utterance|mcp__plugin_mcp-voice-hooks_voice-hooks__wait_for_utterance)$",
+        "matcher": "^(mcp__voice-hooks__wait_for_utterance|mcp__plugin_mcp-voice-hooks.*_voice-hooks__wait_for_utterance)$",
         "hooks": [
           {
             "type": "command",
@@ -33,7 +33,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^(?!mcp__voice-hooks__|mcp__plugin_mcp-voice-hooks_voice-hooks__).*",
+        "matcher": "^(?!mcp__voice-hooks__|mcp__plugin_mcp-voice-hooks.*_voice-hooks__).*",
         "hooks": [
           {
             "type": "command",
