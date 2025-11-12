@@ -19,6 +19,18 @@
 
 **Important**: Claude runs compiled JavaScript from `dist/`, not TypeScript source. Run `npm run build` after changing `.ts` files. Browser files (`public/*`) just need Claude restart.
 
+## Debug Mode
+
+Enable debug logging to see detailed server output:
+
+```bash
+npx mcp-voice-hooks --debug
+# or
+npx mcp-voice-hooks -d
+```
+
+This is useful for troubleshooting issues during development.
+
 ## Release
 
 ```bash
