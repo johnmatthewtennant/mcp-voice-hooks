@@ -124,36 +124,7 @@ This will:
 - Clean up voice hooks from your project's `.claude/settings.local.json`
 - Preserve any custom hooks you've added
 
-## Development Mode
-
-If you're developing mcp-voice-hooks itself:
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/johnmatthewtennant/mcp-voice-hooks.git
-cd mcp-voice-hooks
-
-# 2. Install dependencies
-npm install
-
-# 3. Link the package locally
-npm link
-
-# 4. Install hooks (one time)
-npx mcp-voice-hooks install-hooks
-
-# 5. Start Claude Code
-claude
-```
-
-**Important**: When developing with `npm link`:
-
-- Claude runs the compiled JavaScript from the `dist` folder, not your TypeScript source
-- After making changes to **TypeScript files** (`src/*.ts`), you must run `npm run build`
-- For changes to **browser files** (`public/*`), just restart Claude Code
-- Then restart Claude Code to use the updated code
-
-### Configuration
+## Configuration
 
 #### Port Configuration
 
