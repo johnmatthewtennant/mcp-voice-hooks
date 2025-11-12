@@ -151,7 +151,7 @@ describe('Settings Migration', () => {
       // Check that settings were updated
       const updatedSettings = JSON.parse(fs.readFileSync(settingsLocalPath, 'utf8'));
       expect(updatedSettings.env.PORT).toBe("3000"); // Preserved
-      expect(updatedSettings.hooks.Stop[0].hooks[0].command).toContain("voice-hooks not running"); // Updated to new version
+      expect(updatedSettings.hooks.Stop[0].hooks[0].command).toContain("echo '{}'"); // Updated to new version with empty JSON fallback
       expect(updatedSettings.hooks.PreToolUse).toBeDefined(); // Added
       expect(updatedSettings.hooks.PostToolUse).toBeDefined(); // Added
     });
