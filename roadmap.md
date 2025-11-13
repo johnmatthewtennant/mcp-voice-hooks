@@ -91,22 +91,26 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 
 ### UI/UX Improvements
 
-- [ ] Revamp message queue UI as messenger-style conversation
-  - [ ] Replace current utterances list with conversation-style interface
-  - [ ] Display user voice messages as chat bubbles on the right side
-  - [ ] Display Claude responses (spoken text) as chat bubbles on the left side
-  - [ ] Show timestamps and message status (pending, delivered, responded)
-- [ ] Add typing capability with voice dictation
-  - [ ] Add text input field at bottom of conversation interface
-  - [ ] Replace current "Start Listening" button with dictation button in text input
-  - [ ] Move real-time speech transcription from top of screen into text input field
-  - [ ] Maintain auto-send behavior when Web Speech API detects complete utterance
-  - [ ] Support both manual typing and voice dictation with same auto-send functionality
-  - [ ] Allow users to manually type and send messages as well
-- [ ] Simplify voice settings interface
-  - [ ] Keep voice responses toggle prominent in main interface
-  - [ ] Move voice selection, rate settings, and advanced options to settings menu
-  - [ ] Create cleaner, less cluttered main conversation interface
+- [x] Revamp message queue UI as messenger-style conversation (Phases 1-3 complete)
+  - [x] Backend: Added /api/conversation endpoint with full message history
+  - [x] Backend: Store Claude's responses as assistant messages
+  - [x] Frontend: Created messenger.html with chat bubble interface
+  - [x] Display user messages as blue chat bubbles on the right side
+  - [x] Display Claude responses as gray chat bubbles on the left side
+  - [x] Show timestamps and message status (pending, delivered, responded)
+  - [x] Mobile-responsive design with breakpoints at 768px and 480px
+  - [x] Backwards compatible: --legacy-ui flag to use old interface
+- [x] Add typing capability with voice dictation (completed in Phase 2)
+  - [x] Added textarea at bottom with Enter-to-send (Shift+Enter for newline)
+  - [x] Microphone button integrated inside text input (WhatsApp-style)
+  - [x] Real-time speech transcription appears directly in text input field
+  - [x] Auto-send on pause when Web Speech API detects complete utterance
+  - [x] Supports both manual typing and voice dictation seamlessly
+  - [x] Trigger word mode: accumulates in textarea until trigger word spoken
+- [x] Simplify voice settings interface
+  - [x] Voice responses toggle in main interface
+  - [x] Collapsible settings section for advanced options
+  - [x] Clean, focused conversation interface
 - [ ] UI toggle to enable/disable notification sound when claude is waiting for utterances
 - [x] Remove the text input field from the frontend.
 - [x] Make the in-progress text box permanent so the layout doesn't jump around as the user starts and stops speaking
