@@ -35,7 +35,14 @@ class MessengerClient {
         this.loadData();
 
         // Activate voice input on load so hooks auto-dequeue messages
-        this.updateVoiceInputState(true);
+        // Use setTimeout to ensure this happens after initialization
+        setTimeout(() => {
+            this.updateVoiceInputState(true).then(() => {
+                console.log('[MessengerUI] Voice input activated');
+            }).catch(err => {
+                console.error('[MessengerUI] Failed to activate voice input:', err);
+            });
+        }, 100);
 
         // Auto-refresh every 2 seconds
         setInterval(() => this.loadData(), 2000);
