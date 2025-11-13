@@ -1,279 +1,287 @@
-import request from 'supertest';
-import express from 'express';
+import { TestServer } from '../test-utils/test-server.js';
 
 describe('utterance state transitions', () => {
-  let app: express.Application;
-  let queue: any;
+  let server: TestServer;
 
-  beforeEach(() => {
-    // Mock utterance queue
-    queue = {
-      utterances: [],
-      add: function(text: string, timestamp?: Date) {
-        const utterance = {
-          id: Math.random().toString(36).substr(2, 9),
-          text: text.trim(),
-          timestamp: timestamp || new Date(),
-          status: 'pending'
-        };
-        this.utterances.push(utterance);
-        return utterance;
-      },
-      markDelivered: function(id: string) {
-        const utterance = this.utterances.find((u: any) => u.id === id);
-        if (utterance) {
-          utterance.status = 'delivered';
-        }
-      }
-    };
+  beforeEach(async () => {
+    server = new TestServer();
+    await server.start();
 
-    // Create express app with essential endpoints
-    app = express();
-    app.use(express.json());
-
-    // Add utterance endpoint
-    app.post('/api/potential-utterances', (req, res) => {
-      const { text } = req.body;
-      if (!text || !text.trim()) {
-        res.status(400).json({ error: 'Text is required' });
-        return;
-      }
-      const utterance = queue.add(text);
-      res.json({
-        success: true,
-        utterance: {
-          id: utterance.id,
-          text: utterance.text,
-          timestamp: utterance.timestamp,
-          status: utterance.status,
-        },
-      });
+    // Enable voice input and voice responses for tests
+    await fetch(`${server.url}/api/voice-input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active: true })
     });
 
-    // Dequeue endpoint
-    app.post('/api/dequeue-utterances', (req, res) => {
-      const pendingUtterances = queue.utterances
-        .filter((u: any) => u.status === 'pending');
-
-      pendingUtterances.forEach((u: any) => {
-        queue.markDelivered(u.id);
-      });
-
-      res.json({
-        success: true,
-        utterances: pendingUtterances,
-      });
+    await fetch(`${server.url}/api/voice-responses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true })
     });
+  });
 
-    // Speak endpoint
-    app.post('/api/speak', (req, res) => {
-      const { text } = req.body;
-      if (!text || !text.trim()) {
-        res.status(400).json({ error: 'Text is required' });
-        return;
-      }
-
-      // Mark all delivered utterances as responded
-      const deliveredUtterances = queue.utterances.filter((u: any) => u.status === 'delivered');
-      deliveredUtterances.forEach((u: any) => {
-        u.status = 'responded';
-      });
-
-      res.json({
-        success: true,
-        message: 'Text spoken successfully',
-        respondedCount: deliveredUtterances.length
-      });
-    });
-
-    // Status endpoint
-    app.get('/api/utterances/status', (req, res) => {
-      const total = queue.utterances.length;
-      const pending = queue.utterances.filter((u: any) => u.status === 'pending').length;
-      const delivered = queue.utterances.filter((u: any) => u.status === 'delivered').length;
-      const responded = queue.utterances.filter((u: any) => u.status === 'responded').length;
-
-      res.json({
-        total,
-        pending,
-        delivered,
-        responded
-      });
-    });
+  afterEach(async () => {
+    await server.stop();
   });
 
   describe('state transition: pending -> delivered', () => {
     it('should transition from pending to delivered when dequeued', async () => {
-      // Add utterance (starts as pending)
-      await request(app)
-        .post('/api/potential-utterances')
-        .send({ text: 'Hello world' });
-
-      // Verify pending state
-      let status = await request(app).get('/api/utterances/status');
-      expect(status.body).toMatchObject({
-        total: 1,
-        pending: 1,
-        delivered: 0,
-        responded: 0
+      // Add an utterance (starts as pending)
+      const addResponse = await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Hello world' })
       });
+      const addData = await addResponse.json() as any;
 
-      // Dequeue utterances
-      await request(app)
-        .post('/api/dequeue-utterances')
-        .send({ limit: 10 });
+      expect(addData.utterance.status).toBe('pending');
 
-      // Verify delivered state
-      status = await request(app).get('/api/utterances/status');
-      expect(status.body).toMatchObject({
-        total: 1,
-        pending: 0,
-        delivered: 1,
-        responded: 0
+      // Dequeue it (should become delivered)
+      const dequeueResponse = await fetch(`${server.url}/api/dequeue-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
       });
+      const dequeueData = await dequeueResponse.json() as any;
+
+      expect(dequeueData.success).toBe(true);
+      expect(dequeueData.utterances.length).toBe(1);
+
+      // Check status
+      const statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      const statusData = await statusResponse.json() as any;
+
+      expect(statusData.pending).toBe(0);
+      expect(statusData.delivered).toBe(1);
+      expect(statusData.responded).toBe(0);
     });
 
     it('should handle multiple utterances', async () => {
-      // Add multiple utterances
-      await request(app).post('/api/potential-utterances').send({ text: 'First' });
-      await request(app).post('/api/potential-utterances').send({ text: 'Second' });
-      await request(app).post('/api/potential-utterances').send({ text: 'Third' });
-
-      // Dequeue all pending utterances
-      await request(app)
-        .post('/api/dequeue-utterances')
-        .send({});
-
-      // Verify all are delivered
-      const status = await request(app).get('/api/utterances/status');
-      expect(status.body).toMatchObject({
-        total: 3,
-        pending: 0,
-        delivered: 3,
-        responded: 0
+      // Add three utterances
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'First' })
       });
+
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Second' })
+      });
+
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Third' })
+      });
+
+      // Check status - all pending
+      let statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      let statusData = await statusResponse.json() as any;
+
+      expect(statusData.total).toBe(3);
+      expect(statusData.pending).toBe(3);
+      expect(statusData.delivered).toBe(0);
+
+      // Dequeue all
+      await fetch(`${server.url}/api/dequeue-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      // Check status - all delivered
+      statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      statusData = await statusResponse.json() as any;
+
+      expect(statusData.total).toBe(3);
+      expect(statusData.pending).toBe(0);
+      expect(statusData.delivered).toBe(3);
     });
   });
 
   describe('state transition: delivered -> responded', () => {
     it('should transition from delivered to responded when speak is called', async () => {
-      // Enable voice responses first
-      await request(app)
-        .post('/api/voice-preferences')
-        .send({ voiceResponsesEnabled: true });
-
-      // Add and deliver utterance
-      await request(app).post('/api/potential-utterances').send({ text: 'Hello' });
-      await request(app).post('/api/dequeue-utterances').send({});
-
-      // Verify delivered state
-      let status = await request(app).get('/api/utterances/status');
-      expect(status.body.delivered).toBe(1);
-
-      // Speak response
-      const speakResponse = await request(app)
-        .post('/api/speak')
-        .send({ text: 'Hello to you too!' });
-
-      expect(speakResponse.body.respondedCount).toBe(1);
-
-      // Verify responded state
-      status = await request(app).get('/api/utterances/status');
-      expect(status.body).toMatchObject({
-        total: 1,
-        pending: 0,
-        delivered: 0,
-        responded: 1
+      // Add and dequeue an utterance
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Hello' })
       });
+
+      await fetch(`${server.url}/api/dequeue-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      // Check status - should be delivered
+      let statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      let statusData = await statusResponse.json() as any;
+
+      expect(statusData.delivered).toBe(1);
+      expect(statusData.responded).toBe(0);
+
+      // Speak
+      const speakResponse = await fetch(`${server.url}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Response text' })
+      });
+      const speakData = await speakResponse.json() as any;
+
+      expect(speakResponse.status).toBe(200);
+      expect(speakData.success).toBe(true);
+      expect(speakData.respondedCount).toBe(1);
+
+      // Check status - should be responded
+      statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      statusData = await statusResponse.json() as any;
+
+      expect(statusData.delivered).toBe(0);
+      expect(statusData.responded).toBe(1);
     });
 
     it('should mark all delivered utterances as responded', async () => {
-      // Add multiple utterances
-      await request(app).post('/api/potential-utterances').send({ text: 'First' });
-      await request(app).post('/api/potential-utterances').send({ text: 'Second' });
-      await request(app).post('/api/potential-utterances').send({ text: 'Third' });
-
-      // Dequeue all utterances
-      await request(app).post('/api/dequeue-utterances').send({});
-
-      // Speak response
-      const speakResponse = await request(app)
-        .post('/api/speak')
-        .send({ text: 'Response' });
-
-      expect(speakResponse.body.respondedCount).toBe(3);
-
-      // Verify states
-      const status = await request(app).get('/api/utterances/status');
-      expect(status.body).toMatchObject({
-        total: 3,
-        pending: 0,
-        delivered: 0,
-        responded: 3
+      // Add and dequeue multiple utterances
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'First' })
       });
+
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Second' })
+      });
+
+      await fetch(`${server.url}/api/dequeue-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      // Speak should mark all as responded
+      const speakResponse = await fetch(`${server.url}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Response' })
+      });
+      const speakData = await speakResponse.json() as any;
+
+      expect(speakData.respondedCount).toBe(2);
+
+      // Check status
+      const statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      const statusData = await statusResponse.json() as any;
+
+      expect(statusData.delivered).toBe(0);
+      expect(statusData.responded).toBe(2);
     });
 
     it('should handle speak with no delivered utterances', async () => {
-      const speakResponse = await request(app)
-        .post('/api/speak')
-        .send({ text: 'Speaking without utterances' });
-
-      expect(speakResponse.body).toMatchObject({
-        success: true,
-        respondedCount: 0
+      // Speak without any delivered utterances
+      const speakResponse = await fetch(`${server.url}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Response' })
       });
+      const speakData = await speakResponse.json() as any;
+
+      expect(speakResponse.status).toBe(200);
+      expect(speakData.success).toBe(true);
+      expect(speakData.respondedCount).toBe(0);
     });
   });
 
   describe('complete conversation flow', () => {
     it('should follow pending -> delivered -> responded cycle', async () => {
-      // User speaks
-      await request(app).post('/api/potential-utterances').send({ text: 'What is 2+2?' });
-
-      // Assistant dequeues
-      const dequeueResponse = await request(app)
-        .post('/api/dequeue-utterances')
-        .send({ limit: 10 });
-      
-      expect(dequeueResponse.body.utterances).toHaveLength(1);
-      expect(dequeueResponse.body.utterances[0].text).toBe('What is 2+2?');
-
-      // Assistant speaks response
-      const speakResponse = await request(app)
-        .post('/api/speak')
-        .send({ text: '2+2 equals 4' });
-
-      expect(speakResponse.body.respondedCount).toBe(1);
-
-      // Verify final state
-      const status = await request(app).get('/api/utterances/status');
-      expect(status.body).toMatchObject({
-        total: 1,
-        pending: 0,
-        delivered: 0,
-        responded: 1
+      // 1. Add utterance (pending)
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'User input' })
       });
+
+      let statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      let statusData = await statusResponse.json() as any;
+
+      expect(statusData.pending).toBe(1);
+      expect(statusData.delivered).toBe(0);
+      expect(statusData.responded).toBe(0);
+
+      // 2. Dequeue (delivered)
+      await fetch(`${server.url}/api/dequeue-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      statusData = await statusResponse.json() as any;
+
+      expect(statusData.pending).toBe(0);
+      expect(statusData.delivered).toBe(1);
+      expect(statusData.responded).toBe(0);
+
+      // 3. Speak (responded)
+      await fetch(`${server.url}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Assistant response' })
+      });
+
+      statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      statusData = await statusResponse.json() as any;
+
+      expect(statusData.pending).toBe(0);
+      expect(statusData.delivered).toBe(0);
+      expect(statusData.responded).toBe(1);
     });
 
     it('should handle multiple conversation turns', async () => {
       // First turn
-      await request(app).post('/api/potential-utterances').send({ text: 'Hello' });
-      await request(app).post('/api/dequeue-utterances').send({});
-      await request(app).post('/api/speak').send({ text: 'Hi there!' });
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'First input' })
+      });
+
+      await fetch(`${server.url}/api/dequeue-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      await fetch(`${server.url}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'First response' })
+      });
 
       // Second turn
-      await request(app).post('/api/potential-utterances').send({ text: 'How are you?' });
-      await request(app).post('/api/dequeue-utterances').send({});
-      await request(app).post('/api/speak').send({ text: 'I am doing well!' });
-
-      // Verify final state
-      const status = await request(app).get('/api/utterances/status');
-      expect(status.body).toMatchObject({
-        total: 2,
-        pending: 0,
-        delivered: 0,
-        responded: 2
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Second input' })
       });
-    });
+
+      await fetch(`${server.url}/api/dequeue-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      await fetch(`${server.url}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Second response' })
+      });
+
+      // Final status
+      const statusResponse = await fetch(`${server.url}/api/utterances/status`);
+      const statusData = await statusResponse.json() as any;
+
+      expect(statusData.total).toBe(2);
+      expect(statusData.pending).toBe(0);
+      expect(statusData.delivered).toBe(0);
+      expect(statusData.responded).toBe(2);
+    }, 10000); // Increase timeout for this test that makes 4 speak calls
   });
 });
