@@ -92,11 +92,10 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 ### UI/UX Improvements
 
 - [ ] Revamp message queue UI as messenger-style conversation
+  - [ ] Replace current utterances list with conversation-style interface
   - [ ] Display user voice messages as chat bubbles on the right side
   - [ ] Display Claude responses (spoken text) as chat bubbles on the left side
   - [ ] Show timestamps and message status (pending, delivered, responded)
-  - [ ] Add message grouping and visual conversation flow
-  - [ ] Replace current utterances list with conversation-style interface
 - [ ] Add typing capability with voice dictation
   - [ ] Add text input field at bottom of conversation interface
   - [ ] Replace current "Start Listening" button with dictation button in text input
@@ -108,6 +107,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
   - [ ] Keep voice responses toggle prominent in main interface
   - [ ] Move voice selection, rate settings, and advanced options to settings menu
   - [ ] Create cleaner, less cluttered main conversation interface
+- [ ] UI toggle to enable/disable notification sound when claude is waiting for utterances
 - [x] Remove the text input field from the frontend.
 - [x] Make the in-progress text box permanent so the layout doesn't jump around as the user starts and stops speaking
 - [x] remove the limit() parameter from the dequeue_utterances MCP tool. It should just dequeue all utterances.
