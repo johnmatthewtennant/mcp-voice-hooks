@@ -695,8 +695,9 @@ class MessengerClient {
             if (interimTranscript) {
                 // In trigger mode, preserve accumulated text and append interim
                 if (this.sendMode === 'trigger' && this.accumulatedText) {
-                    // Show accumulated + interim with space
-                    this.messageInput.value = this.accumulatedText + ' ' + interimTranscript;
+                    // Show accumulated + interim (interim may already have leading space)
+                    const separator = interimTranscript.startsWith(' ') ? '' : ' ';
+                    this.messageInput.value = this.accumulatedText + separator + interimTranscript.trim();
                 } else {
                     // Show just interim
                     this.messageInput.value = interimTranscript;
