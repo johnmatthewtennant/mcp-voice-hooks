@@ -1,6 +1,6 @@
 {
   "name": "mcp-voice-hooks",
-  "version": "1.0.37",
+  "version": "1.0.38",
   "main": "dist/unified-server.js",
   "type": "module",
   "bin": {
