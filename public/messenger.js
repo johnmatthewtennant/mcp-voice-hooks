@@ -478,8 +478,20 @@ class MessengerClient {
                     if (bubble) {
                         const statusEl = bubble.querySelector('.message-status');
                         if (statusEl) {
+                            // Check if status changed from pending to something else
+                            const wasPending = statusEl.classList.contains('pending');
+                            const isPending = message.status === 'pending';
+
+                            if (wasPending && !isPending) {
+                                // Status changed from pending - remove delete button
+                                const deleteBtn = statusEl.querySelector('.delete-message-btn');
+                                if (deleteBtn) {
+                                    deleteBtn.remove();
+                                }
+                            }
+
+                            // Update status class and text
                             statusEl.className = `message-status ${message.status}`;
-                            // Only update the status text span, not the entire container
                             const statusText = statusEl.querySelector('span:last-child');
                             if (statusText) {
                                 statusText.textContent = message.status.toUpperCase();
