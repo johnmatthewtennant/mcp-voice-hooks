@@ -282,6 +282,6 @@ describe('utterance state transitions', () => {
       expect(statusData.pending).toBe(0);
       expect(statusData.delivered).toBe(0);
       expect(statusData.responded).toBe(2);
-    }, 10000); // Increase timeout for this test that makes 4 speak calls
+    });
   });
 });

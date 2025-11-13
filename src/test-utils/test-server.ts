@@ -4,10 +4,12 @@ import http from 'http';
 import { AddressInfo } from 'net';
 import cors from 'cors';
 import { randomUUID } from 'crypto';
-import { exec } from 'child_process';
-import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+// Mock execAsync for testing - we don't want to actually run TTS
+const execAsync = async (command: string): Promise<{ stdout: string; stderr: string }> => {
+  // Simulate successful execution without actually running the command
+  return { stdout: '', stderr: '' };
+};
 
 // Utterance types
 interface Utterance {
