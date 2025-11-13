@@ -230,7 +230,7 @@ class MessengerClient {
             this.micBtn.classList.add('listening');
             this.listeningIndicator.classList.add('active');
 
-            await this.updateVoiceInputState(true);
+            // Voice input already active from page load - no need to call again
         } catch (e) {
             console.error('Failed to start recognition:', e);
             alert('Failed to start speech recognition');
@@ -249,7 +249,8 @@ class MessengerClient {
                 this.isInterimText = false;
             }
 
-            await this.updateVoiceInputState(false);
+            // Don't deactivate voice input - keep it active for typed messages too
+            // Voice input should stay active as long as messenger UI is open
         }
     }
 
