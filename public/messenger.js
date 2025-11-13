@@ -352,7 +352,7 @@ class MessengerClient {
 
     async updateVoiceInputState(active) {
         try {
-            await fetch(`${this.baseUrl}/api/voice-input`, {
+            await fetch(`${this.baseUrl}/api/voice-input-state`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ active })
@@ -364,10 +364,10 @@ class MessengerClient {
 
     async updateVoiceResponses(enabled) {
         try {
-            await fetch(`${this.baseUrl}/api/voice-responses`, {
+            await fetch(`${this.baseUrl}/api/voice-preferences`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ enabled })
+                body: JSON.stringify({ voiceResponsesEnabled: enabled })
             });
         } catch (error) {
             console.error('Failed to update voice responses:', error);
