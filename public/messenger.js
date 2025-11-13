@@ -11,7 +11,6 @@ class MessengerClient {
         // Text input elements
         this.messageInput = document.getElementById('messageInput');
         this.micBtn = document.getElementById('micBtn');
-        this.listeningIndicator = document.getElementById('listeningIndicator');
 
         // Send mode controls
         this.sendModeRadios = document.querySelectorAll('input[name="sendMode"]');
@@ -116,6 +115,8 @@ class MessengerClient {
 
                 if (data.type === 'speak' && data.text) {
                     this.speakText(data.text);
+                } else if (data.type === 'waitStatus') {
+                    this.handleWaitStatus(data.isWaiting);
                 }
             } catch (error) {
                 console.error('Failed to parse TTS event:', error);
@@ -125,6 +126,16 @@ class MessengerClient {
         this.eventSource.onerror = (error) => {
             console.error('SSE connection error:', error);
         };
+    }
+
+    handleWaitStatus(isWaiting) {
+        const waitingIndicator = document.getElementById('waitingIndicator');
+        if (waitingIndicator) {
+            waitingIndicator.style.display = isWaiting ? 'block' : 'none';
+            if (isWaiting) {
+                this.scrollToBottom();
+            }
+        }
     }
 
     async speakText(text) {
@@ -585,7 +596,6 @@ class MessengerClient {
             this.recognition.start();
             this.isListening = true;
             this.micBtn.classList.add('listening');
-            this.listeningIndicator.classList.add('active');
 
             // Activate voice input when mic is on
             await this.updateVoiceInputState(true);
@@ -600,7 +610,6 @@ class MessengerClient {
             this.isListening = false;
             this.recognition.stop();
             this.micBtn.classList.remove('listening');
-            this.listeningIndicator.classList.remove('active');
 
             // Send any accumulated text in the input
             const text = this.messageInput.value.trim();

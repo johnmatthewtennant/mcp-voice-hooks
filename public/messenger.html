@@ -29,6 +29,9 @@
 
         /* Header */
         .app-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             padding: 16px 20px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -148,6 +151,16 @@
         .empty-state p {
             margin: 0;
             font-size: 16px;
+        }
+
+        /* Waiting Indicator */
+        .waiting-indicator {
+            text-align: center;
+            color: #999;
+            font-size: 14px;
+            font-style: italic;
+            padding: 12px 20px;
+            margin-top: 8px;
         }
 
         /* Message Bubbles */
@@ -387,43 +400,6 @@
         }
 
         /* Listening Indicator */
-        .listening-indicator {
-            display: none;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            background: #FFEBEE;
-            border: 1px solid #EF5350;
-            border-radius: 6px;
-            color: #C62828;
-            font-size: 14px;
-            font-weight: 500;
-            margin-bottom: 12px;
-        }
-
-        .listening-indicator.active {
-            display: flex;
-        }
-
-        .listening-dot {
-            width: 12px;
-            height: 12px;
-            background: #EF5350;
-            border-radius: 50%;
-            animation: pulse 1.5s ease-in-out infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                opacity: 1;
-                transform: scale(1);
-            }
-            50% {
-                opacity: 0.5;
-                transform: scale(1.2);
-            }
-        }
-
         /* Settings Toggle */
         .settings-toggle {
             margin-top: 16px;
@@ -729,8 +705,11 @@
     <div class="app-container">
         <!-- Header -->
         <div class="app-header">
-            <h1>Voice Mode for Claude Code</h1>
-            <div class="subtitle">Real-time voice conversation interface</div>
+            <div>
+                <h1>Voice Mode for Claude Code</h1>
+                <div class="subtitle">Real-time voice conversation interface</div>
+            </div>
+            <a href="/legacy" style="padding: 8px 16px; background: rgba(255,255,255,0.2); color: white; text-decoration: none; border-radius: 6px; font-size: 14px; font-weight: 500; white-space: nowrap;">Switch to Legacy UI</a>
         </div>
 
         <!-- Main Content -->
@@ -762,6 +741,9 @@
                             </svg>
                             <p id="emptyStateMessage">No messages yet. Type or speak to start the conversation!</p>
                         </div>
+                        <div id="waitingIndicator" class="waiting-indicator" style="display: none;">
+                            Claude is waiting...
+                        </div>
                     </div>
                 </div>
             </div>
@@ -787,12 +769,6 @@
                             value="send"
                         >
                     </div>
-                </div>
-
-                <!-- Listening Indicator -->
-                <div id="listeningIndicator" class="listening-indicator">
-                    <span class="listening-dot"></span>
-                    <span>Listening...</span>
                 </div>
 
                 <!-- Text Input with Microphone -->
