@@ -31,12 +31,43 @@ class MessengerClient {
 
         // Initialize
         this.initializeSpeechRecognition();
+        this.initializeTTS();
         this.setupEventListeners();
         this.loadPreferences();
         this.loadData();
 
         // Auto-refresh every 2 seconds
         setInterval(() => this.loadData(), 2000);
+    }
+
+    initializeTTS() {
+        // Connect to SSE for TTS events
+        this.eventSource = new EventSource(`${this.baseUrl}/api/tts-events`);
+
+        this.eventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'speak' && data.text) {
+                    this.speakText(data.text);
+                }
+            } catch (error) {
+                console.error('Failed to parse TTS event:', error);
+            }
+        };
+
+        this.eventSource.onerror = (error) => {
+            console.error('SSE connection error:', error);
+        };
+    }
+
+    speakText(text) {
+        // Use browser's speech synthesis
+        if ('speechSynthesis' in window) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'en-US';
+            speechSynthesis.speak(utterance);
+        }
     }
 
     loadPreferences() {
@@ -117,39 +148,69 @@ class MessengerClient {
         }
 
         emptyState.style.display = 'none';
-        container.querySelectorAll('.message-bubble').forEach(el => el.remove());
 
-        // Render messages in chronological order
-        messages.forEach(message => {
-            const bubble = document.createElement('div');
-            bubble.className = `message-bubble ${message.role}`;
-
-            const messageText = document.createElement('div');
-            messageText.className = 'message-text';
-            messageText.textContent = message.text;
-
-            const messageMeta = document.createElement('div');
-            messageMeta.className = 'message-meta';
-
-            const timestamp = document.createElement('span');
-            timestamp.className = 'message-timestamp';
-            timestamp.textContent = this.formatTimestamp(message.timestamp);
-            messageMeta.appendChild(timestamp);
-
-            // Only show status for user messages
-            if (message.role === 'user' && message.status) {
-                const status = document.createElement('span');
-                status.className = `message-status ${message.status}`;
-                status.textContent = message.status.toUpperCase();
-                messageMeta.appendChild(status);
+        // Get existing message IDs to avoid duplicates
+        const existingBubbles = container.querySelectorAll('.message-bubble');
+        const existingIds = new Set();
+        existingBubbles.forEach(bubble => {
+            if (bubble.dataset.messageId) {
+                existingIds.add(bubble.dataset.messageId);
             }
+        });
 
-            bubble.appendChild(messageText);
-            bubble.appendChild(messageMeta);
-            container.appendChild(bubble);
+        // Only render new messages and update status for existing ones
+        messages.forEach(message => {
+            if (!existingIds.has(message.id)) {
+                // New message - create bubble
+                const bubble = this.createMessageBubble(message);
+                container.appendChild(bubble);
+            } else {
+                // Existing message - update status if it's a user message
+                if (message.role === 'user' && message.status) {
+                    const bubble = container.querySelector(`[data-message-id="${message.id}"]`);
+                    if (bubble) {
+                        const statusEl = bubble.querySelector('.message-status');
+                        if (statusEl) {
+                            statusEl.className = `message-status ${message.status}`;
+                            statusEl.textContent = message.status.toUpperCase();
+                        }
+                    }
+                }
+            }
         });
 
         this.scrollToBottom();
+    }
+
+    createMessageBubble(message) {
+        const bubble = document.createElement('div');
+        bubble.className = `message-bubble ${message.role}`;
+        bubble.dataset.messageId = message.id;
+
+        const messageText = document.createElement('div');
+        messageText.className = 'message-text';
+        messageText.textContent = message.text;
+
+        const messageMeta = document.createElement('div');
+        messageMeta.className = 'message-meta';
+
+        const timestamp = document.createElement('span');
+        timestamp.className = 'message-timestamp';
+        timestamp.textContent = this.formatTimestamp(message.timestamp);
+        messageMeta.appendChild(timestamp);
+
+        // Only show status for user messages
+        if (message.role === 'user' && message.status) {
+            const status = document.createElement('div');
+            status.className = `message-status ${message.status}`;
+            status.textContent = message.status.toUpperCase();
+            messageMeta.appendChild(status);
+        }
+
+        bubble.appendChild(messageText);
+        bubble.appendChild(messageMeta);
+
+        return bubble;
     }
 
     scrollToBottom() {
