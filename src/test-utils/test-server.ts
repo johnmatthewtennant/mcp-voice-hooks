@@ -317,6 +317,59 @@ export class TestServer {
       res.json({ success: true });
     });
 
+    // POST /api/validate-action
+    this.app.post('/api/validate-action', (req, res) => {
+      const { action } = req.body;
+
+      if (!action || !['tool-use', 'stop'].includes(action)) {
+        res.status(400).json({ error: 'Invalid action. Must be "tool-use" or "stop"' });
+        return;
+      }
+
+      // Check for pending utterances (only if voice input is active)
+      if (this.voicePreferences.voiceInputActive) {
+        const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
+        if (pendingUtterances.length > 0) {
+          res.json({
+            allowed: false,
+            requiredAction: 'dequeue_utterances',
+            reason: `${pendingUtterances.length} pending utterance(s) must be dequeued first. Please use dequeue_utterances to process them.`
+          });
+          return;
+        }
+      }
+
+      // Check for delivered but unresponded utterances (when voice enabled)
+      if (this.voicePreferences.voiceResponsesEnabled) {
+        const deliveredUtterances = this.queue.utterances.filter(u => u.status === 'delivered');
+        if (deliveredUtterances.length > 0) {
+          res.json({
+            allowed: false,
+            requiredAction: 'speak',
+            reason: `${deliveredUtterances.length} delivered utterance(s) require voice response. Please use the speak tool to respond before proceeding.`
+          });
+          return;
+        }
+      }
+
+      // For stop action, check if we should wait (only if voice input is active)
+      if (action === 'stop' && this.voicePreferences.voiceInputActive) {
+        if (this.queue.utterances.length > 0) {
+          res.json({
+            allowed: false,
+            requiredAction: 'wait_for_utterance',
+            reason: 'Assistant tried to end its response. Stopping is not allowed without first checking for voice input. Assistant should now use wait_for_utterance to check for voice input'
+          });
+          return;
+        }
+      }
+
+      // All checks passed - action is allowed
+      res.json({
+        allowed: true
+      });
+    });
+
     // Hook endpoints for testing
     this.app.post('/api/hooks/stop', (_req, res) => {
       // Check for pending utterances
