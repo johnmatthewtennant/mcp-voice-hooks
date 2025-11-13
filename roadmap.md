@@ -35,14 +35,14 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 
 ### Next tasks
 
-- [ ] Add UI switch buttons in both interfaces
-  - [ ] Add button in messenger UI top right to switch to legacy UI
-  - [ ] Add button in legacy UI top right to switch to messenger UI
-  - [ ] Links to /legacy and /messenger respectively
-- [ ] Show "Claude is waiting..." indicator in messenger UI when wait_for_utterance is active
-  - [ ] Display waiting status received from SSE events
-  - [ ] Visual indicator similar to legacy UI
-- [ ] Remove red "Listening..." indicator box from messenger UI (mic button already shows listening state)
+- [x] Add UI switch buttons in both interfaces
+  - [x] Add button in messenger UI top right to switch to legacy UI
+  - [x] Add button in legacy UI top right to switch to messenger UI
+  - [x] Links to /legacy and /messenger respectively
+- [x] Show "Claude is waiting..." indicator in messenger UI when wait_for_utterance is active
+  - [x] Display waiting status received from SSE events
+  - [x] Visual indicator similar to legacy UI
+- [x] Remove red "Listening..." indicator box from messenger UI (mic button already shows listening state)
 - [x] Phase 1-4 of test improvements completed:
   - [x] Removed low-value mocked tests (mcp-speak-response.test.ts, 242 lines)
   - [x] Created TestServer helper for real HTTP integration tests (370 lines)
