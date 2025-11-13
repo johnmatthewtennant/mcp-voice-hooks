@@ -35,6 +35,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 
 ### Next tasks
 
+- [ ] Remove red "Listening..." indicator box from messenger UI (mic button already shows listening state)
 - [x] Phase 1-4 of test improvements completed:
   - [x] Removed low-value mocked tests (mcp-speak-response.test.ts, 242 lines)
   - [x] Created TestServer helper for real HTTP integration tests (370 lines)
