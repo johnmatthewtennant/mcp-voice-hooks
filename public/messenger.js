@@ -508,10 +508,30 @@ class MessengerClient {
 
         // Only show status for user messages
         if (message.role === 'user' && message.status) {
-            const status = document.createElement('div');
-            status.className = `message-status ${message.status}`;
-            status.textContent = message.status.toUpperCase();
-            messageMeta.appendChild(status);
+            const statusContainer = document.createElement('div');
+            statusContainer.className = `message-status ${message.status}`;
+
+            // Add delete button for pending messages (shows on hover)
+            if (message.status === 'pending') {
+                const deleteBtn = document.createElement('span');
+                deleteBtn.className = 'delete-message-btn';
+                deleteBtn.innerHTML = `
+                    <svg class="delete-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                    </svg>
+                `;
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this.deleteMessage(message.id);
+                };
+                statusContainer.appendChild(deleteBtn);
+            }
+
+            const statusText = document.createElement('span');
+            statusText.textContent = message.status.toUpperCase();
+            statusContainer.appendChild(statusText);
+
+            messageMeta.appendChild(statusContainer);
         }
 
         bubble.appendChild(messageText);
@@ -747,6 +767,30 @@ class MessengerClient {
         const words = text.split(/\s+/);
         const filtered = words.filter(w => w.toLowerCase() !== this.triggerWord.toLowerCase());
         return filtered.join(' ');
+    }
+
+    async deleteMessage(messageId) {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/utterances/${messageId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                // Remove the message bubble from DOM immediately
+                const bubble = this.conversationMessages.querySelector(`[data-message-id="${messageId}"]`);
+                if (bubble) {
+                    bubble.remove();
+                }
+                // Refresh to sync with server
+                this.loadData();
+            } else {
+                const error = await response.json();
+                console.error('Failed to delete message:', error);
+                alert(`Failed to delete: ${error.error || 'Unknown error'}`);
+            }
+        } catch (error) {
+            console.error('Failed to delete message:', error);
+        }
     }
 
     async updateVoiceInputState(active) {

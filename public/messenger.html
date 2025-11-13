@@ -244,6 +244,30 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
             white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .delete-message-btn {
+            display: none;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+
+        .message-bubble:hover .delete-message-btn {
+            display: inline-block;
+        }
+
+        .delete-message-btn:hover {
+            opacity: 1;
+        }
+
+        .delete-icon {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
         }
 
         /* Status Colors for User Messages */

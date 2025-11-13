@@ -120,6 +120,20 @@ class UtteranceQueue {
     }
   }
 
+  delete(id: string): boolean {
+    const utterance = this.utterances.find(u => u.id === id);
+
+    // Only allow deleting pending messages
+    if (utterance && utterance.status === 'pending') {
+      this.utterances = this.utterances.filter(u => u.id !== id);
+      this.messages = this.messages.filter(m => m.id !== id);
+      debugLog(`[Queue] Deleted pending message: "${utterance.text}"	[id: ${id}]`);
+      return true;
+    }
+
+    return false;
+  }
+
   clear(): void {
     const count = this.utterances.length;
     this.utterances = [];
@@ -535,6 +549,26 @@ app.post('/api/hooks/post-tool', (_req: Request, res: Response) => {
 });
 
 // API to clear all utterances
+// Delete specific utterance by ID
+app.delete('/api/utterances/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  const deleted = queue.delete(id);
+
+  if (deleted) {
+    res.json({
+      success: true,
+      message: 'Message deleted'
+    });
+  } else {
+    res.status(400).json({
+      error: 'Only pending messages can be deleted',
+      success: false
+    });
+  }
+});
+
+// Delete all utterances
 app.delete('/api/utterances', (_req: Request, res: Response) => {
   const clearedCount = queue.utterances.length;
   queue.clear();
