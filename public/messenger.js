@@ -34,6 +34,9 @@ class MessengerClient {
         this.setupEventListeners();
         this.loadData();
 
+        // Activate voice input on load so hooks auto-dequeue messages
+        this.updateVoiceInputState(true);
+
         // Auto-refresh every 2 seconds
         setInterval(() => this.loadData(), 2000);
     }
