@@ -35,6 +35,7 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 
 ### Next tasks
 
+- [ ] Add ability to delete pending messages in messenger UI
 - [x] Add UI switch buttons in both interfaces
   - [x] Add button in messenger UI top right to switch to legacy UI
   - [x] Add button in legacy UI top right to switch to messenger UI
