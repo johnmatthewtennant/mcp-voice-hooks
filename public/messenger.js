@@ -22,19 +22,34 @@ class MessengerClient {
         this.settingsToggleHeader = document.getElementById('settingsToggleHeader');
         this.settingsContent = document.getElementById('settingsContent');
         this.voiceResponsesToggle = document.getElementById('voiceResponsesToggle');
-        this.voiceSelection = document.getElementById('voiceSelection');
+        this.voiceOptions = document.getElementById('voiceOptions');
+        this.languageSelect = document.getElementById('languageSelect');
         this.voiceSelect = document.getElementById('voiceSelect');
+        this.localVoicesGroup = document.getElementById('localVoicesGroup');
+        this.cloudVoicesGroup = document.getElementById('cloudVoicesGroup');
+        this.speechRateSlider = document.getElementById('speechRate');
+        this.speechRateInput = document.getElementById('speechRateInput');
+        this.testTTSBtn = document.getElementById('testTTSBtn');
+        this.rateWarning = document.getElementById('rateWarning');
+        this.systemVoiceInfo = document.getElementById('systemVoiceInfo');
 
         // State
         this.sendMode = 'automatic'; // 'automatic' or 'trigger'
         this.triggerWord = 'send';
         this.isListening = false;
         this.isInterimText = false;
-        this.selectedVoice = 'system'; // 'system' or voice name for browser voices
+        this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
+
+        // TTS state
+        this.voices = [];
+        this.selectedVoice = 'system';
+        this.speechRate = 1.0;
+        this.speechPitch = 1.0;
 
         // Initialize
         this.initializeSpeechRecognition();
-        this.initializeTTS();
+        this.initializeSpeechSynthesis();
+        this.initializeTTSEvents();
         this.setupEventListeners();
         this.loadPreferences();
         this.loadData();
@@ -43,7 +58,54 @@ class MessengerClient {
         setInterval(() => this.loadData(), 2000);
     }
 
-    initializeTTS() {
+    debugLog(...args) {
+        if (this.debug) {
+            console.log(...args);
+        }
+    }
+
+    initializeSpeechSynthesis() {
+        // Check for browser support
+        if (!window.speechSynthesis) {
+            console.warn('Speech synthesis not supported in this browser');
+            return;
+        }
+
+        // Get available voices
+        this.voices = [];
+
+        // Enhanced voice loading with deduplication
+        const loadVoices = () => {
+            const voices = window.speechSynthesis.getVoices();
+
+            // Deduplicate voices - keep the first occurrence of each unique voice
+            const deduplicatedVoices = [];
+            const seen = new Set();
+
+            voices.forEach(voice => {
+                // Create a unique key based on name, language, and URI
+                const key = `${voice.name}-${voice.lang}-${voice.voiceURI}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    deduplicatedVoices.push(voice);
+                }
+            });
+
+            this.voices = deduplicatedVoices;
+            this.populateVoiceList();
+        };
+
+        // Load voices initially and with a delayed retry for reliability
+        loadVoices();
+        setTimeout(loadVoices, 100);
+
+        // Set up voice change listener
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+    }
+
+    initializeTTSEvents() {
         // Connect to SSE for TTS events
         this.eventSource = new EventSource(`${this.baseUrl}/api/tts-events`);
 
@@ -65,32 +127,66 @@ class MessengerClient {
     }
 
     async speakText(text) {
+        // Check if we should use system voice
         if (this.selectedVoice === 'system') {
-            // Use Mac system voice via API
+            // Use Mac system voice via server
             try {
-                await fetch(`${this.baseUrl}/api/speak-system`, {
+                const response = await fetch(`${this.baseUrl}/api/speak-system`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text })
+                    body: JSON.stringify({
+                        text: text,
+                        rate: Math.round(this.speechRate * 150) // Convert rate to words per minute
+                    }),
                 });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    console.error('Failed to speak via system voice:', error);
+                }
             } catch (error) {
-                console.error('Failed to speak with system voice:', error);
+                console.error('Failed to call speak-system API:', error);
             }
         } else {
-            // Use browser speech synthesis
-            if ('speechSynthesis' in window) {
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'en-US';
-
-                // Find and use selected voice
-                const voices = window.speechSynthesis.getVoices();
-                const voice = voices.find(v => v.name === this.selectedVoice);
-                if (voice) {
-                    utterance.voice = voice;
-                }
-
-                speechSynthesis.speak(utterance);
+            // Use browser voice
+            if (!window.speechSynthesis) {
+                console.error('Speech synthesis not available');
+                return;
             }
+
+            // Cancel any ongoing speech
+            window.speechSynthesis.cancel();
+
+            // Create utterance
+            const utterance = new SpeechSynthesisUtterance(text);
+
+            // Set voice if using browser voice
+            if (this.selectedVoice && this.selectedVoice.startsWith('browser:')) {
+                const voiceIndex = parseInt(this.selectedVoice.substring(8));
+                if (this.voices[voiceIndex]) {
+                    utterance.voice = this.voices[voiceIndex];
+                }
+            }
+
+            // Set speech properties
+            utterance.rate = this.speechRate;
+            utterance.pitch = this.speechPitch;
+
+            // Event handlers
+            utterance.onstart = () => {
+                this.debugLog('Started speaking:', text);
+            };
+
+            utterance.onend = () => {
+                this.debugLog('Finished speaking');
+            };
+
+            utterance.onerror = (event) => {
+                console.error('Speech synthesis error:', event);
+            };
+
+            // Speak the text
+            window.speechSynthesis.speak(utterance);
         }
     }
 
@@ -100,7 +196,7 @@ class MessengerClient {
         if (savedVoiceResponses !== null) {
             const enabled = savedVoiceResponses === 'true';
             this.voiceResponsesToggle.checked = enabled;
-            this.voiceSelection.style.display = enabled ? 'block' : 'none';
+            this.voiceOptions.style.display = enabled ? 'block' : 'none';
             this.updateVoiceResponses(enabled);
         }
 
@@ -108,42 +204,126 @@ class MessengerClient {
         const savedVoice = localStorage.getItem('selectedVoice');
         if (savedVoice) {
             this.selectedVoice = savedVoice;
-            this.voiceSelect.value = savedVoice;
         }
 
-        // Load browser voices
-        this.loadVoices();
+        // Load speech rate
+        const savedRate = localStorage.getItem('speechRate');
+        if (savedRate) {
+            this.speechRate = parseFloat(savedRate);
+            if (this.speechRateSlider) this.speechRateSlider.value = this.speechRate.toString();
+            if (this.speechRateInput) this.speechRateInput.value = this.speechRate.toFixed(1);
+        }
     }
 
-    loadVoices() {
-        // Wait for voices to be loaded (async in some browsers)
-        const populateVoices = () => {
-            const voices = window.speechSynthesis.getVoices();
+    populateLanguageFilter() {
+        if (!this.languageSelect || !this.voices) return;
 
-            // Clear existing browser voice options (keep system)
-            const systemOption = this.voiceSelect.querySelector('option[value="system"]');
-            this.voiceSelect.innerHTML = '';
-            if (systemOption) {
-                this.voiceSelect.appendChild(systemOption);
+        const currentSelection = this.languageSelect.value || 'en-US';
+        this.languageSelect.innerHTML = '';
+
+        const allOption = document.createElement('option');
+        allOption.value = 'all';
+        allOption.textContent = 'All Languages';
+        this.languageSelect.appendChild(allOption);
+
+        const languageCodes = new Set();
+        this.voices.forEach(voice => {
+            languageCodes.add(voice.lang);
+        });
+
+        Array.from(languageCodes).sort().forEach(lang => {
+            const option = document.createElement('option');
+            option.value = lang;
+            option.textContent = lang;
+            this.languageSelect.appendChild(option);
+        });
+
+        this.languageSelect.value = currentSelection;
+        if (this.languageSelect.value !== currentSelection) {
+            this.languageSelect.value = 'en-US';
+        }
+    }
+
+    populateVoiceList() {
+        if (!this.voiceSelect || !this.localVoicesGroup || !this.cloudVoicesGroup) return;
+
+        this.populateLanguageFilter();
+
+        this.localVoicesGroup.innerHTML = '';
+        this.cloudVoicesGroup.innerHTML = '';
+
+        const excludedVoices = [
+            'Eddy', 'Flo', 'Grandma', 'Grandpa', 'Reed', 'Rocko', 'Sandy', 'Shelley',
+            'Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles', 'Cellos',
+            'Good News', 'Jester', 'Organ', 'Superstar', 'Trinoids', 'Whisper',
+            'Wobble', 'Zarvox', 'Fred', 'Junior', 'Kathy', 'Ralph'
+        ];
+
+        const selectedLanguage = this.languageSelect ? this.languageSelect.value : 'en-US';
+
+        this.voices.forEach((voice, index) => {
+            const voiceLang = voice.lang;
+            let shouldInclude = selectedLanguage === 'all' || voiceLang === selectedLanguage;
+
+            if (shouldInclude) {
+                const voiceName = voice.name;
+                const isExcluded = excludedVoices.some(excluded =>
+                    voiceName.toLowerCase().startsWith(excluded.toLowerCase())
+                );
+
+                if (!isExcluded) {
+                    const option = document.createElement('option');
+                    option.value = `browser:${index}`;
+                    option.textContent = `${voice.name} (${voice.lang})`;
+
+                    if (voice.localService) {
+                        this.localVoicesGroup.appendChild(option);
+                    } else {
+                        this.cloudVoicesGroup.appendChild(option);
+                    }
+                }
             }
+        });
 
-            // Add browser voices
-            voices.forEach(voice => {
-                const option = document.createElement('option');
-                option.value = voice.name;
-                option.textContent = `${voice.name} (${voice.lang})`;
-                this.voiceSelect.appendChild(option);
-            });
+        if (this.localVoicesGroup.children.length === 0) {
+            this.localVoicesGroup.style.display = 'none';
+        } else {
+            this.localVoicesGroup.style.display = '';
+        }
 
-            // Restore selection
-            if (this.selectedVoice) {
-                this.voiceSelect.value = this.selectedVoice;
+        if (this.cloudVoicesGroup.children.length === 0) {
+            this.cloudVoicesGroup.style.display = 'none';
+        } else {
+            this.cloudVoicesGroup.style.display = '';
+        }
+
+        // Restore selection or find default
+        if (this.selectedVoice) {
+            this.voiceSelect.value = this.selectedVoice;
+        }
+
+        this.updateVoiceWarnings();
+    }
+
+    updateVoiceWarnings() {
+        if (this.selectedVoice === 'system') {
+            this.systemVoiceInfo.style.display = 'flex';
+            this.rateWarning.style.display = 'none';
+        } else if (this.selectedVoice && this.selectedVoice.startsWith('browser:')) {
+            const voiceIndex = parseInt(this.selectedVoice.substring(8));
+            const voice = this.voices[voiceIndex];
+
+            if (voice) {
+                const isGoogleVoice = voice.name.toLowerCase().includes('google');
+                this.rateWarning.style.display = isGoogleVoice ? 'flex' : 'none';
+                this.systemVoiceInfo.style.display = voice.localService ? 'flex' : 'none';
+            } else {
+                this.rateWarning.style.display = 'none';
+                this.systemVoiceInfo.style.display = 'none';
             }
-        };
-
-        if (window.speechSynthesis) {
-            populateVoices();
-            window.speechSynthesis.onvoiceschanged = populateVoices;
+        } else {
+            this.rateWarning.style.display = 'none';
+            this.systemVoiceInfo.style.display = 'none';
         }
     }
 
@@ -189,15 +369,53 @@ class MessengerClient {
         this.voiceResponsesToggle.addEventListener('change', async (e) => {
             const enabled = e.target.checked;
             await this.updateVoiceResponses(enabled);
-            // Show/hide voice selection based on toggle
-            this.voiceSelection.style.display = enabled ? 'block' : 'none';
+            // Show/hide voice options based on toggle
+            this.voiceOptions.style.display = enabled ? 'block' : 'none';
         });
 
         // Voice selection
         this.voiceSelect.addEventListener('change', (e) => {
             this.selectedVoice = e.target.value;
             localStorage.setItem('selectedVoice', this.selectedVoice);
+            this.updateVoiceWarnings();
         });
+
+        // Language filter
+        if (this.languageSelect) {
+            this.languageSelect.addEventListener('change', () => {
+                this.populateVoiceList();
+            });
+        }
+
+        // Speech rate slider
+        if (this.speechRateSlider) {
+            this.speechRateSlider.addEventListener('input', (e) => {
+                this.speechRate = parseFloat(e.target.value);
+                this.speechRateInput.value = this.speechRate.toFixed(1);
+                localStorage.setItem('speechRate', this.speechRate.toString());
+            });
+        }
+
+        // Speech rate text input
+        if (this.speechRateInput) {
+            this.speechRateInput.addEventListener('input', (e) => {
+                let value = parseFloat(e.target.value);
+                if (!isNaN(value)) {
+                    value = Math.max(0.5, Math.min(5, value));
+                    this.speechRate = value;
+                    this.speechRateSlider.value = value.toString();
+                    this.speechRateInput.value = value.toFixed(1);
+                    localStorage.setItem('speechRate', this.speechRate.toString());
+                }
+            });
+        }
+
+        // Test TTS button
+        if (this.testTTSBtn) {
+            this.testTTSBtn.addEventListener('click', () => {
+                this.speakText('This is Voice Mode for Claude Code. How can I help you today?');
+            });
+        }
     }
 
     async loadData() {
