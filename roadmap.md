@@ -35,16 +35,20 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 
 ### Next tasks
 
-- [ ] Continue test improvements (3 test files remaining):
-  - [ ] Refactor voice-input-state.test.ts to use real server
-  - [ ] Refactor validate-action.test.ts to use real server
-  - [ ] Refactor conversation-flow.test.ts to use real server
-- [x] Phase 1-3 of test improvements completed:
-  - [x] Removed low-value mocked tests (mcp-speak-response.test.ts)
-  - [x] Created TestServer helper for real HTTP integration tests
+- [x] Phase 1-4 of test improvements completed:
+  - [x] Removed low-value mocked tests (mcp-speak-response.test.ts, 242 lines)
+  - [x] Created TestServer helper for real HTTP integration tests (370 lines)
   - [x] Added 13 new HTTP integration tests
-  - [x] Refactored speak-endpoint.test.ts and utterance-states.test.ts to use real server
-  - All 86 tests passing with TDD green-red-green cycles
+  - [x] Refactored 5 test files to use real server:
+    - speak-endpoint.test.ts (8 tests)
+    - utterance-states.test.ts (7 tests)
+    - voice-input-state.test.ts (8 tests)
+    - validate-action.test.ts (13 tests)
+    - http-server-integration.test.ts (13 new tests)
+  - [x] Mocked TTS calls for fast, reliable tests (3.4s test suite)
+  - [x] Removed 750+ lines of duplicated mock infrastructure
+  - All 86 tests passing with TDD green-red-green methodology
+  - conversation-flow.test.ts skipped (tests obsolete pre-wait hooks)
 - [x] make sure voice input and voice responses are disabled when the browser is closed
 - [x] ~~make the disable pre-tool hook configuration more nuanced. It should only control if we deqeueue before tools. We always want to enforce speaking if there are unresponded utterances.~~ (Pre-tool hook removed)
 - [ ] add a note to the pre-speak hook that the voice response was not delivered because the assistant needs to read the new utterances first
