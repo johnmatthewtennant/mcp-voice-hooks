@@ -32,20 +32,21 @@ class MessengerClient {
         // Initialize
         this.initializeSpeechRecognition();
         this.setupEventListeners();
+        this.loadPreferences();
         this.loadData();
-
-        // Activate voice input on load so hooks auto-dequeue messages
-        // Use setTimeout to ensure this happens after initialization
-        setTimeout(() => {
-            this.updateVoiceInputState(true).then(() => {
-                console.log('[MessengerUI] Voice input activated');
-            }).catch(err => {
-                console.error('[MessengerUI] Failed to activate voice input:', err);
-            });
-        }, 100);
 
         // Auto-refresh every 2 seconds
         setInterval(() => this.loadData(), 2000);
+    }
+
+    loadPreferences() {
+        // Load voice responses preference from localStorage
+        const savedVoiceResponses = localStorage.getItem('voiceResponsesEnabled');
+        if (savedVoiceResponses !== null) {
+            const enabled = savedVoiceResponses === 'true';
+            this.voiceResponsesToggle.checked = enabled;
+            this.updateVoiceResponses(enabled);
+        }
     }
 
     setupEventListeners() {
@@ -230,7 +231,8 @@ class MessengerClient {
             this.micBtn.classList.add('listening');
             this.listeningIndicator.classList.add('active');
 
-            // Voice input already active from page load - no need to call again
+            // Activate voice input when mic is on
+            await this.updateVoiceInputState(true);
         } catch (e) {
             console.error('Failed to start recognition:', e);
             alert('Failed to start speech recognition');
@@ -244,13 +246,29 @@ class MessengerClient {
             this.micBtn.classList.remove('listening');
             this.listeningIndicator.classList.remove('active');
 
-            if (this.isInterimText) {
-                this.messageInput.value = '';
-                this.isInterimText = false;
+            // Send any accumulated text in the input
+            const text = this.messageInput.value.trim();
+            if (text) {
+                // In trigger mode, check for trigger word
+                if (this.sendMode === 'trigger') {
+                    if (this.containsTriggerWord(text)) {
+                        const textToSend = this.removeTriggerWord(text);
+                        await this.sendMessage(textToSend);
+                        this.messageInput.value = '';
+                    }
+                    // If no trigger word, keep text in input for user to continue
+                } else {
+                    // In automatic mode, send the text
+                    await this.sendMessage(text);
+                    this.messageInput.value = '';
+                }
             }
 
-            // Don't deactivate voice input - keep it active for typed messages too
-            // Voice input should stay active as long as messenger UI is open
+            this.isInterimText = false;
+            this.messageInput.style.height = 'auto';
+
+            // Deactivate voice input when mic is turned off
+            await this.updateVoiceInputState(false);
         }
     }
 
@@ -372,6 +390,10 @@ class MessengerClient {
 
     async updateVoiceResponses(enabled) {
         try {
+            // Save to localStorage
+            localStorage.setItem('voiceResponsesEnabled', enabled.toString());
+
+            // Update server
             await fetch(`${this.baseUrl}/api/voice-preferences`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

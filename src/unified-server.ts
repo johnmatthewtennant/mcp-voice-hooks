@@ -214,14 +214,8 @@ app.get('/api/utterances/status', (_req: Request, res: Response) => {
 
 // Shared dequeue logic
 function dequeueUtterancesCore() {
-  // Check if voice input is active
-  if (!voicePreferences.voiceInputActive) {
-    return {
-      success: false,
-      error: 'Voice input is not active. Cannot dequeue utterances when voice input is disabled.'
-    };
-  }
-
+  // Always dequeue pending utterances regardless of voiceInputActive
+  // This allows both typed and spoken messages to be dequeued
   const pendingUtterances = queue.utterances
     .filter(u => u.status === 'pending')
     .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
@@ -243,12 +237,6 @@ function dequeueUtterancesCore() {
 // MCP server integration
 app.post('/api/dequeue-utterances', (_req: Request, res: Response) => {
   const result = dequeueUtterancesCore();
-
-  if (!result.success && result.error) {
-    res.status(400).json(result);
-    return;
-  }
-
   res.json(result);
 });
 
@@ -422,21 +410,21 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   const voiceInputActive = voicePreferences.voiceInputActive;
 
   // 1. Check for pending utterances and auto-dequeue
-  if (voiceInputActive) {
-    const pendingUtterances = queue.utterances.filter(u => u.status === 'pending');
-    if (pendingUtterances.length > 0) {
-      // Auto-dequeue for all actions
-      const dequeueResult = dequeueUtterancesCore();
+  // Always check for pending utterances regardless of voiceInputActive
+  // This allows typed messages to be dequeued even when mic is off
+  const pendingUtterances = queue.utterances.filter(u => u.status === 'pending');
+  if (pendingUtterances.length > 0) {
+    // Always dequeue (dequeueUtterancesCore no longer requires voiceInputActive)
+    const dequeueResult = dequeueUtterancesCore();
 
-      if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
-        // Reverse to show oldest first
-        const reversedUtterances = dequeueResult.utterances.reverse();
+    if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
+      // Reverse to show oldest first
+      const reversedUtterances = dequeueResult.utterances.reverse();
 
-        return {
-          decision: 'block',
-          reason: formatVoiceUtterances(reversedUtterances)
-        };
-      }
+      return {
+        decision: 'block',
+        reason: formatVoiceUtterances(reversedUtterances)
+      };
     }
   }
 
