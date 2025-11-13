@@ -72,7 +72,7 @@ Transform the current list-based utterance display into a modern messenger-style
 - **CLI Flag**: Add `--legacy-ui` flag to `bin/cli.js`, route `/` based on flag
 - **TDD Discipline**: Write failing test first (RED), implement feature (GREEN), verify test catches bugs (RED), fix (GREEN)
 - **Store Messages**: Add `ConversationMessage` objects with `role: 'user' | 'assistant'`
-- **Keep Trigger Word**: Queue in browser memory (no backend changes needed)
+- **Trigger Word Simplification**: Accumulate all speech in text input field until trigger word is said, then send as single message (no separate queue preview UI)
 - **CSS Flexbox**: Chat bubble layout (user: `flex-end`, Claude: `flex-start`)
 - **Microphone Button**: Toggles `isListening` state inside text input
 
@@ -361,15 +361,6 @@ Build completely new frontend files (`messenger.html`, `messenger.js`, `messenge
         </div>
     </div>
 
-    <!-- Trigger Word Queue Preview (only shown in trigger word mode) -->
-    <div id="queuePreview" class="queue-preview" style="display: none;">
-        <div class="queue-preview-header">
-            <span>📝 Queued Messages</span>
-            <button id="sendQueuedBtn" class="send-queued-btn">Send All</button>
-        </div>
-        <div id="queuedMessagesList" class="queued-messages-list"></div>
-    </div>
-
     <!-- Conversation Messages -->
     <div id="conversationContainer" class="conversation-container">
         <div id="conversationMessages" class="conversation-messages">
@@ -450,55 +441,6 @@ Build completely new frontend files (`messenger.html`, `messenger.js`, `messenge
 
 .icon-button.danger:hover svg {
     fill: #EF5350;
-}
-
-/* Queue Preview (Trigger Word Mode) */
-.queue-preview {
-    background: #FFF9C4;
-    border-bottom: 2px solid #F9A825;
-    padding: 12px 20px;
-}
-
-.queue-preview-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-    font-weight: 500;
-    color: #F57F17;
-}
-
-.send-queued-btn {
-    background: #F9A825;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    padding: 6px 12px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.2s;
-}
-
-.send-queued-btn:hover {
-    background: #F57F17;
-}
-
-.queued-messages-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 120px;
-    overflow-y: auto;
-}
-
-.queued-message-item {
-    background: white;
-    padding: 8px 12px;
-    border-radius: 8px;
-    font-size: 14px;
-    color: #333;
-    border-left: 3px solid #F9A825;
 }
 
 /* Conversation Container */
@@ -729,40 +671,8 @@ scrollToBottom() {
 **Update** queued utterances display for trigger word mode (add new method around line 870):
 
 ```javascript
-updateQueuePreview() {
-    const queuePreview = document.getElementById('queuePreview');
-    const queuedMessagesList = document.getElementById('queuedMessagesList');
-
-    if (this.sendMode === 'trigger' && this.utteranceQueue.length > 0) {
-        queuePreview.style.display = 'block';
-
-        queuedMessagesList.innerHTML = this.utteranceQueue.map(text => `
-            <div class="queued-message-item">${this.escapeHtml(text)}</div>
-        `).join('');
-    } else {
-        queuePreview.style.display = 'none';
-    }
-}
-```
-
-**Update** `queueUtterance` method to call `updateQueuePreview`:
-
-```javascript
-queueUtterance(text) {
-    const trimmedText = text.trim();
-    if (!trimmedText) return;
-
-    this.utteranceQueue.push(trimmedText);
-    this.updateQueuePreview(); // NEW: Update preview UI
-    this.checkForTriggerWord(trimmedText);
-}
-```
-
-**Wire up** send queued button (in constructor, around line 150):
-
-```javascript
-document.getElementById('sendQueuedBtn').addEventListener('click', () => this.sendQueuedUtterances());
-```
+// No queue preview UI needed! Trigger word mode simply accumulates in the text input.
+// The logic is much simpler - just append to messageInput.value with newlines.
 
 ### Success Criteria:
 
@@ -783,9 +693,9 @@ document.getElementById('sendQueuedBtn').addEventListener('click', () => this.se
 - [ ] Container auto-scrolls to bottom when new messages arrive
 - [ ] Refresh button re-fetches and displays latest conversation
 - [ ] Clear All button removes all messages
-- [ ] Toggle to trigger word mode → Queue preview appears at top
-- [ ] Speak multiple test messages → They appear in queue preview
-- [ ] Click "Send All" → All queued messages send and appear as blue bubbles
+- [ ] Toggle to trigger word mode
+- [ ] Speak "first message", pause, speak "second message" → Both accumulate in text input with newlines
+- [ ] Speak trigger word "send" → All accumulated text sends as single blue bubble
 
 **Implementation Note**: After completing this phase, verify that the messenger UI displays correctly at `http://localhost:5111/messenger.html` before proceeding to CLI routing.
 
@@ -1376,14 +1286,24 @@ initializeSpeechRecognition() {
                 this.messageInput.removeAttribute('data-interim');
 
                 const finalText = this.messageInput.value.trim();
-                this.messageInput.value = ''; // Clear for next input
 
                 if (this.sendMode === 'automatic') {
-                    // Send immediately
+                    // Send immediately and clear
                     this.sendVoiceUtterance(finalText);
+                    this.messageInput.value = '';
                 } else {
-                    // Queue the utterance and check for trigger word
-                    this.queueUtterance(finalText);
+                    // Trigger word mode: Check if this utterance contains trigger word
+                    if (this.containsTriggerWord(finalText)) {
+                        // Remove trigger word and send accumulated text
+                        const textToSend = this.removeTriggerWord(finalText);
+                        this.sendVoiceUtterance(textToSend);
+                        this.messageInput.value = '';
+                    } else {
+                        // No trigger word - append to existing text with newline
+                        const currentText = this.messageInput.value;
+                        this.messageInput.value = currentText ? currentText + '\n' + transcript : transcript;
+                        this.autoGrowTextarea();
+                    }
                 }
             } else {
                 // Still speaking - show interim results in input
@@ -1483,9 +1403,9 @@ Since this is primarily frontend JavaScript, TDD will focus on manual verificati
 - [ ] Stop speaking (pause) → Message auto-sends, input clears ✓
 - [ ] Microphone button turns red while listening, blue when not ✓
 - [ ] Click microphone again while listening → Stops, clears interim text ✓
-- [ ] Toggle to trigger word mode → Queue preview shows at top ✓
-- [ ] Speak multiple messages with dictation → Queue preview shows all messages ✓
-- [ ] Say trigger word "send" → All messages send, queue clears ✓
+- [ ] Toggle to trigger word mode ✓
+- [ ] Speak "first message", pause, speak "second message" → Both accumulate in text input ✓
+- [ ] Say trigger word "send" → All accumulated text sends as one message ✓
 - [ ] Mix typing and voice: type message, send, then use voice → Both work seamlessly ✓
 - [ ] Auto-scroll works when messages fill container ✓
 - [ ] Legacy UI still works at `http://localhost:5111/legacy` ✓
@@ -1536,13 +1456,13 @@ No new unit tests required - existing tests cover backend logic. Focus on integr
 #### Scenario 3: Trigger Word Mode
 1. Toggle to "Wait for trigger word" mode
 2. Click microphone button
-3. Speak "First message"
-4. Verify: Appears in queue preview at top
-5. Speak "Second message"
-6. Verify: Both messages in queue preview
+3. Speak "First message" and pause
+4. Verify: "First message" appears in text input
+5. Speak "Second message" and pause
+6. Verify: Text input now shows "First message\nSecond message" (accumulated with newline)
 7. Speak trigger word "send"
-8. Verify: Both messages send, appear as separate blue bubbles
-9. Verify: Queue preview clears
+8. Verify: All accumulated text sends as single blue bubble
+9. Verify: Text input clears
 
 #### Scenario 4: Mixed Input
 1. Type "I'm typing this" and press Enter
