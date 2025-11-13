@@ -458,12 +458,19 @@ class MessengerClient {
             }
         });
 
+        // Get waiting indicator to insert messages before it
+        const waitingIndicator = container.querySelector('.waiting-indicator');
+
         // Only render new messages and update status for existing ones
         messages.forEach(message => {
             if (!existingIds.has(message.id)) {
-                // New message - create bubble
+                // New message - create bubble and insert before waiting indicator
                 const bubble = this.createMessageBubble(message);
-                container.appendChild(bubble);
+                if (waitingIndicator) {
+                    container.insertBefore(bubble, waitingIndicator);
+                } else {
+                    container.appendChild(bubble);
+                }
             } else {
                 // Existing message - update status if it's a user message
                 if (message.role === 'user' && message.status) {
