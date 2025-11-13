@@ -3,7 +3,8 @@ import type { Express } from 'express';
 import http from 'http';
 import { AddressInfo } from 'net';
 import cors from 'cors';
-import { randomUUID } from 'crypto';
+import { randomUUID} from 'crypto';
+import path from 'path';
 
 // Mock execAsync for testing - we don't want to actually run TTS
 const execAsync = async (command: string): Promise<{ stdout: string; stderr: string }> => {
@@ -437,6 +438,23 @@ export class TestServer {
       res.json({
         allowed: true
       });
+    });
+
+    // HTML routes for UI
+    this.app.get('/', (_req, res) => {
+      // Default to messenger UI
+      const publicDir = path.join(process.cwd(), 'public');
+      res.sendFile(path.join(publicDir, 'messenger.html'));
+    });
+
+    this.app.get('/legacy', (_req, res) => {
+      const publicDir = path.join(process.cwd(), 'public');
+      res.sendFile(path.join(publicDir, 'index.html'));
+    });
+
+    this.app.get('/messenger', (_req, res) => {
+      const publicDir = path.join(process.cwd(), 'public');
+      res.sendFile(path.join(publicDir, 'messenger.html'));
     });
 
     // Hook endpoints for testing

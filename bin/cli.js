@@ -155,6 +155,11 @@ async function runMCPServer() {
     serverArgs.push('--debug');
   }
 
+  // Pass legacy UI flag to server via environment variable
+  if (args.includes('--legacy-ui')) {
+    process.env.MCP_VOICE_HOOKS_LEGACY_UI = 'true';
+  }
+
   // Run the compiled JavaScript server
   const child = spawn('node', [serverPath, ...serverArgs], {
     stdio: 'inherit',
