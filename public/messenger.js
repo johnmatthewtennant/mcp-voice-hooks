@@ -3,8 +3,6 @@ class MessengerClient {
         this.baseUrl = window.location.origin;
 
         // Conversation elements
-        this.refreshBtn = document.getElementById('refreshBtn');
-        this.clearAllBtn = document.getElementById('clearAllBtn');
         this.conversationMessages = document.getElementById('conversationMessages');
         this.conversationContainer = document.getElementById('conversationContainer');
 
@@ -340,10 +338,6 @@ class MessengerClient {
     }
 
     setupEventListeners() {
-        // Refresh and clear buttons
-        this.refreshBtn.addEventListener('click', () => this.loadData());
-        this.clearAllBtn.addEventListener('click', () => this.clearAllMessages());
-
         // Text input events
         this.messageInput.addEventListener('keydown', (e) => this.handleTextInputKeydown(e));
         this.messageInput.addEventListener('input', () => this.autoGrowTextarea());
@@ -746,22 +740,6 @@ class MessengerClient {
         const words = text.split(/\s+/);
         const filtered = words.filter(w => w.toLowerCase() !== this.triggerWord.toLowerCase());
         return filtered.join(' ');
-    }
-
-    async clearAllMessages() {
-        if (!confirm('Clear all messages?')) return;
-
-        try {
-            const response = await fetch(`${this.baseUrl}/api/utterances`, {
-                method: 'DELETE'
-            });
-
-            if (response.ok) {
-                this.loadData();
-            }
-        } catch (error) {
-            console.error('Failed to clear messages:', error);
-        }
     }
 
     async updateVoiceInputState(active) {
