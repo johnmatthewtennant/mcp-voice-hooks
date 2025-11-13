@@ -22,12 +22,15 @@ class MessengerClient {
         this.settingsToggleHeader = document.getElementById('settingsToggleHeader');
         this.settingsContent = document.getElementById('settingsContent');
         this.voiceResponsesToggle = document.getElementById('voiceResponsesToggle');
+        this.voiceSelection = document.getElementById('voiceSelection');
+        this.voiceSelect = document.getElementById('voiceSelect');
 
         // State
         this.sendMode = 'automatic'; // 'automatic' or 'trigger'
         this.triggerWord = 'send';
         this.isListening = false;
         this.isInterimText = false;
+        this.selectedVoice = 'system'; // 'system' or voice name for browser voices
 
         // Initialize
         this.initializeSpeechRecognition();
@@ -61,12 +64,33 @@ class MessengerClient {
         };
     }
 
-    speakText(text) {
-        // Use browser's speech synthesis
-        if ('speechSynthesis' in window) {
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = 'en-US';
-            speechSynthesis.speak(utterance);
+    async speakText(text) {
+        if (this.selectedVoice === 'system') {
+            // Use Mac system voice via API
+            try {
+                await fetch(`${this.baseUrl}/api/speak-system`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text })
+                });
+            } catch (error) {
+                console.error('Failed to speak with system voice:', error);
+            }
+        } else {
+            // Use browser speech synthesis
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'en-US';
+
+                // Find and use selected voice
+                const voices = window.speechSynthesis.getVoices();
+                const voice = voices.find(v => v.name === this.selectedVoice);
+                if (voice) {
+                    utterance.voice = voice;
+                }
+
+                speechSynthesis.speak(utterance);
+            }
         }
     }
 
@@ -76,7 +100,50 @@ class MessengerClient {
         if (savedVoiceResponses !== null) {
             const enabled = savedVoiceResponses === 'true';
             this.voiceResponsesToggle.checked = enabled;
+            this.voiceSelection.style.display = enabled ? 'block' : 'none';
             this.updateVoiceResponses(enabled);
+        }
+
+        // Load voice selection
+        const savedVoice = localStorage.getItem('selectedVoice');
+        if (savedVoice) {
+            this.selectedVoice = savedVoice;
+            this.voiceSelect.value = savedVoice;
+        }
+
+        // Load browser voices
+        this.loadVoices();
+    }
+
+    loadVoices() {
+        // Wait for voices to be loaded (async in some browsers)
+        const populateVoices = () => {
+            const voices = window.speechSynthesis.getVoices();
+
+            // Clear existing browser voice options (keep system)
+            const systemOption = this.voiceSelect.querySelector('option[value="system"]');
+            this.voiceSelect.innerHTML = '';
+            if (systemOption) {
+                this.voiceSelect.appendChild(systemOption);
+            }
+
+            // Add browser voices
+            voices.forEach(voice => {
+                const option = document.createElement('option');
+                option.value = voice.name;
+                option.textContent = `${voice.name} (${voice.lang})`;
+                this.voiceSelect.appendChild(option);
+            });
+
+            // Restore selection
+            if (this.selectedVoice) {
+                this.voiceSelect.value = this.selectedVoice;
+            }
+        };
+
+        if (window.speechSynthesis) {
+            populateVoices();
+            window.speechSynthesis.onvoiceschanged = populateVoices;
         }
     }
 
@@ -120,7 +187,16 @@ class MessengerClient {
 
         // Voice responses toggle
         this.voiceResponsesToggle.addEventListener('change', async (e) => {
-            await this.updateVoiceResponses(e.target.checked);
+            const enabled = e.target.checked;
+            await this.updateVoiceResponses(enabled);
+            // Show/hide voice selection based on toggle
+            this.voiceSelection.style.display = enabled ? 'block' : 'none';
+        });
+
+        // Voice selection
+        this.voiceSelect.addEventListener('change', (e) => {
+            this.selectedVoice = e.target.value;
+            localStorage.setItem('selectedVoice', this.selectedVoice);
         });
     }
 
