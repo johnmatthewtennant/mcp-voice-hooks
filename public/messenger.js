@@ -479,7 +479,11 @@ class MessengerClient {
                         const statusEl = bubble.querySelector('.message-status');
                         if (statusEl) {
                             statusEl.className = `message-status ${message.status}`;
-                            statusEl.textContent = message.status.toUpperCase();
+                            // Only update the status text span, not the entire container
+                            const statusText = statusEl.querySelector('span:last-child');
+                            if (statusText) {
+                                statusText.textContent = message.status.toUpperCase();
+                            }
                         }
                     }
                 }
