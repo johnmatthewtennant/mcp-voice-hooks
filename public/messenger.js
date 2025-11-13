@@ -38,6 +38,7 @@ class MessengerClient {
         this.triggerWord = 'send';
         this.isListening = false;
         this.isInterimText = false;
+        this.accumulatedText = ''; // For trigger word mode
         this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
 
         // TTS state
@@ -651,22 +652,34 @@ class MessengerClient {
                     // User paused
                     this.isInterimText = false;
 
-                    const finalText = this.messageInput.value.trim();
-
                     if (this.sendMode === 'automatic') {
                         // Send immediately
+                        const finalText = this.messageInput.value.trim();
                         this.sendMessage(finalText);
                         this.messageInput.value = '';
                     } else {
-                        // Trigger word mode: check for trigger word
-                        if (this.containsTriggerWord(finalText)) {
-                            const textToSend = this.removeTriggerWord(finalText);
-                            this.sendMessage(textToSend);
+                        // Trigger word mode: accumulate until trigger word
+                        // First, get what's currently in the input (might be empty or have previous utterances)
+                        const currentAccumulated = this.messageInput.value;
+
+                        // The final transcript is what was just spoken
+                        const newUtterance = transcript.trim();
+
+                        // Check if this new utterance contains the trigger word
+                        if (this.containsTriggerWord(newUtterance)) {
+                            // Send everything accumulated plus this utterance (minus trigger word)
+                            const combined = currentAccumulated ? currentAccumulated + '\n' + newUtterance : newUtterance;
+                            const textToSend = this.removeTriggerWord(combined).trim();
+                            if (textToSend) {
+                                this.sendMessage(textToSend);
+                            }
                             this.messageInput.value = '';
+                            this.accumulatedText = '';
                         } else {
-                            // Append with newline
-                            const currentText = this.messageInput.value;
-                            this.messageInput.value = currentText ? currentText + '\n' + transcript : transcript;
+                            // No trigger word - append this utterance to accumulated text
+                            this.messageInput.value = currentAccumulated
+                                ? currentAccumulated + '\n' + newUtterance
+                                : newUtterance;
                             this.autoGrowTextarea();
                         }
                     }
@@ -677,7 +690,20 @@ class MessengerClient {
             }
 
             if (interimTranscript) {
-                this.messageInput.value = interimTranscript;
+                // In trigger mode, preserve accumulated text and append interim
+                if (this.sendMode === 'trigger' && !this.isInterimText) {
+                    // Save current accumulated text
+                    this.accumulatedText = this.messageInput.value;
+                }
+
+                if (this.sendMode === 'trigger' && this.accumulatedText) {
+                    // Show accumulated + interim
+                    this.messageInput.value = this.accumulatedText + '\n' + interimTranscript;
+                } else {
+                    // Show just interim
+                    this.messageInput.value = interimTranscript;
+                }
+
                 this.isInterimText = true;
                 this.autoGrowTextarea();
             }
