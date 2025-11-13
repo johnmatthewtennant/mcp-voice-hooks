@@ -1,6 +1,6 @@
 {
   "name": "mcp-voice-hooks-plugin",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "Real-time voice interaction for Claude Code. Speak naturally while Claude works - interrupt, redirect, or provide continuous feedback without stopping.",
   "author": {
     "name": "John Matthew Tennant",
