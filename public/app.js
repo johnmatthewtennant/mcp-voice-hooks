@@ -1,385 +1,59 @@
-class VoiceHooksClient {
+class MessengerClient {
     constructor() {
         this.baseUrl = window.location.origin;
-        this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
-        this.refreshBtn = document.getElementById('refreshBtn');
-        this.clearAllBtn = document.getElementById('clearAllBtn');
-        this.utterancesList = document.getElementById('utterancesList');
-        this.infoMessage = document.getElementById('infoMessage');
 
-        // Voice controls
-        this.listenBtn = document.getElementById('listenBtn');
-        this.listenBtnText = document.getElementById('listenBtnText');
-        this.listeningIndicator = document.getElementById('listeningIndicator');
-        this.interimText = document.getElementById('interimText');
+        // Conversation elements
+        this.conversationMessages = document.getElementById('conversationMessages');
+        this.conversationContainer = document.getElementById('conversationContainer');
+
+        // Text input elements
+        this.messageInput = document.getElementById('messageInput');
+        this.micBtn = document.getElementById('micBtn');
 
         // Send mode controls
-        this.sendModeAutomatic = document.getElementById('sendModeAutomatic');
-        this.sendModeWait = document.getElementById('sendModeWait');
-        this.triggerWordControls = document.getElementById('triggerWordControls');
+        this.sendModeRadios = document.querySelectorAll('input[name="sendMode"]');
+        this.triggerWordInputContainer = document.getElementById('triggerWordInputContainer');
         this.triggerWordInput = document.getElementById('triggerWordInput');
-        this.sendNowBtn = document.getElementById('sendNowBtn');
-        this.queuedUtterancesSection = document.getElementById('queuedUtterancesSection');
-        this.queuedUtterancesList = document.getElementById('queuedUtterancesList');
-        this.queuedCount = document.getElementById('queuedCount');
 
-        // Utterance queue for wait mode
-        this.utteranceQueue = [];
-        this.sendMode = 'automatic'; // 'automatic' or 'wait'
-        this.triggerWord = '';
-
-        // Speech recognition
-        this.recognition = null;
-        this.isListening = false;
-        this.initializeSpeechRecognition();
-
-        // Speech synthesis
-        this.initializeSpeechSynthesis();
-
-        // Server-Sent Events for TTS
-        this.initializeTTSEvents();
-
-        // TTS controls
+        // Settings
+        this.settingsToggleHeader = document.getElementById('settingsToggleHeader');
+        this.settingsContent = document.getElementById('settingsContent');
+        this.voiceResponsesToggle = document.getElementById('voiceResponsesToggle');
+        this.voiceOptions = document.getElementById('voiceOptions');
         this.languageSelect = document.getElementById('languageSelect');
         this.voiceSelect = document.getElementById('voiceSelect');
+        this.localVoicesGroup = document.getElementById('localVoicesGroup');
+        this.cloudVoicesGroup = document.getElementById('cloudVoicesGroup');
         this.speechRateSlider = document.getElementById('speechRate');
         this.speechRateInput = document.getElementById('speechRateInput');
         this.testTTSBtn = document.getElementById('testTTSBtn');
-        this.voiceResponsesToggle = document.getElementById('voiceResponsesToggle');
-        this.voiceOptions = document.getElementById('voiceOptions');
-        this.localVoicesGroup = document.getElementById('localVoicesGroup');
-        this.cloudVoicesGroup = document.getElementById('cloudVoicesGroup');
         this.rateWarning = document.getElementById('rateWarning');
         this.systemVoiceInfo = document.getElementById('systemVoiceInfo');
 
-        // Load saved preferences
-        this.loadPreferences();
+        // State
+        this.sendMode = 'automatic'; // 'automatic' or 'trigger'
+        this.triggerWord = 'send';
+        this.isListening = false;
+        this.isInterimText = false;
+        this.accumulatedText = ''; // For trigger word mode
+        this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
 
+        // TTS state
+        this.voices = [];
+        this.selectedVoice = 'system';
+        this.speechRate = 1.0;
+        this.speechPitch = 1.0;
+
+        // Initialize
+        this.initializeSpeechRecognition();
+        this.initializeSpeechSynthesis();
+        this.initializeTTSEvents();
         this.setupEventListeners();
+        this.loadPreferences();
         this.loadData();
 
         // Auto-refresh every 2 seconds
         setInterval(() => this.loadData(), 2000);
-    }
-
-    initializeSpeechRecognition() {
-        // Check for browser support
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-        if (!SpeechRecognition) {
-            console.error('Speech recognition not supported in this browser');
-            this.listenBtn.disabled = true;
-            this.listenBtnText.textContent = 'Not Supported';
-            return;
-        }
-
-        this.recognition = new SpeechRecognition();
-        this.recognition.continuous = true;
-        this.recognition.interimResults = true;
-
-        // Handle results
-        this.recognition.onresult = (event) => {
-            let interimTranscript = '';
-
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-                const transcript = event.results[i][0].transcript;
-
-                if (event.results[i].isFinal) {
-                    // User paused - handle based on send mode
-                    if (this.sendMode === 'automatic') {
-                        // Send immediately
-                        this.sendVoiceUtterance(transcript);
-                    } else {
-                        // Queue the utterance and check for trigger word
-                        this.queueUtterance(transcript);
-                    }
-                    // Restore placeholder text
-                    this.interimText.textContent = 'Start speaking and your words will appear here...';
-                    this.interimText.classList.remove('active');
-                } else {
-                    // Still speaking - show interim results
-                    interimTranscript += transcript;
-                }
-            }
-
-            if (interimTranscript) {
-                this.interimText.textContent = interimTranscript;
-                this.interimText.classList.add('active');
-            }
-        };
-
-        // Handle errors
-        this.recognition.onerror = (event) => {
-            console.error('Speech recognition error:', event.error);
-
-            if (event.error === 'no-speech') {
-                // Continue listening
-                return;
-            }
-
-            if (event.error === 'not-allowed') {
-                alert('Microphone access denied. Please allow microphone access to use voice input.');
-            } else {
-                alert(`Speech recognition error: ${event.error}`);
-            }
-
-            this.stopListening();
-        };
-
-        // Handle end
-        this.recognition.onend = () => {
-            if (this.isListening) {
-                // Restart recognition to continue listening
-                try {
-                    this.recognition.start();
-                } catch (e) {
-                    console.error('Failed to restart recognition:', e);
-                    this.stopListening();
-                }
-            }
-        };
-    }
-
-    setupEventListeners() {
-        this.refreshBtn.addEventListener('click', () => this.loadData());
-        this.clearAllBtn.addEventListener('click', () => this.clearAllUtterances());
-        this.listenBtn.addEventListener('click', () => this.toggleListening());
-
-        // Language filter
-        if (this.languageSelect) {
-            this.languageSelect.addEventListener('change', () => {
-                // Save language preference
-                localStorage.setItem('selectedLanguage', this.languageSelect.value);
-                // Repopulate voice list with filtered voices
-                this.populateVoiceList();
-            });
-        }
-
-        // TTS controls
-        this.voiceSelect.addEventListener('change', (e) => {
-            this.selectedVoice = e.target.value;
-            // Save selected voice to localStorage
-            localStorage.setItem('selectedVoice', this.selectedVoice);
-            this.updateVoicePreferences();
-            this.updateVoiceWarnings();
-        });
-
-        this.speechRateSlider.addEventListener('input', (e) => {
-            this.speechRate = parseFloat(e.target.value);
-            this.speechRateInput.value = this.speechRate.toFixed(1);
-            // Save rate to localStorage
-            localStorage.setItem('speechRate', this.speechRate.toString());
-        });
-
-        this.speechRateInput.addEventListener('input', (e) => {
-            let value = parseFloat(e.target.value);
-            if (!isNaN(value)) {
-                value = Math.max(0.5, Math.min(5, value)); // Clamp to valid range
-                this.speechRate = value;
-                this.speechRateSlider.value = value.toString();
-                this.speechRateInput.value = value.toFixed(1);
-                // Save rate to localStorage
-                localStorage.setItem('speechRate', this.speechRate.toString());
-            }
-        });
-
-        this.testTTSBtn.addEventListener('click', () => {
-            this.speakText('This is Voice Mode for Claude Code. How can I help you today?');
-        });
-
-        // Voice toggle listeners
-        this.voiceResponsesToggle.addEventListener('change', (e) => {
-            const enabled = e.target.checked;
-            localStorage.setItem('voiceResponsesEnabled', enabled);
-            this.updateVoicePreferences();
-            this.updateVoiceOptionsVisibility();
-        });
-
-        // Send mode listeners
-        this.sendModeAutomatic.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                this.sendMode = 'automatic';
-                this.updateSendModeUI();
-                localStorage.setItem('sendMode', 'automatic');
-            }
-        });
-
-        this.sendModeWait.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                this.sendMode = 'wait';
-                this.updateSendModeUI();
-                localStorage.setItem('sendMode', 'wait');
-            }
-        });
-
-        this.triggerWordInput.addEventListener('input', (e) => {
-            this.triggerWord = e.target.value.trim();
-            localStorage.setItem('triggerWord', this.triggerWord);
-        });
-
-        this.sendNowBtn.addEventListener('click', () => {
-            this.sendQueuedUtterances();
-        });
-    }
-
-
-    async loadData() {
-        try {
-            // Load utterances
-            const utterancesResponse = await fetch(`${this.baseUrl}/api/utterances?limit=20`);
-            if (utterancesResponse.ok) {
-                const data = await utterancesResponse.json();
-                this.updateUtterancesList(data.utterances);
-            }
-        } catch (error) {
-            console.error('Failed to load data:', error);
-        }
-    }
-
-    updateUtterancesList(utterances) {
-        if (utterances.length === 0) {
-            this.utterancesList.innerHTML = '<div class="empty-state">Nothing yet.</div>';
-            this.infoMessage.style.display = 'none';
-            return;
-        }
-
-        // Check if all messages are pending
-        const allPending = utterances.every(u => u.status === 'pending');
-        if (allPending) {
-            // Show info message but don't replace the utterances list
-            this.infoMessage.style.display = 'block';
-        } else {
-            // Hide info message when at least one utterance is delivered
-            this.infoMessage.style.display = 'none';
-        }
-
-        this.utterancesList.innerHTML = utterances.map(utterance => `
-            <div class="utterance-item">
-                <div class="utterance-text">${this.escapeHtml(utterance.text)}</div>
-                <div class="utterance-meta">
-                    <div>${this.formatTimestamp(utterance.timestamp)}</div>
-                    <div class="utterance-status status-${utterance.status}">
-                        ${utterance.status.toUpperCase()}
-                    </div>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    formatTimestamp(timestamp) {
-        const date = new Date(timestamp);
-        return date.toLocaleTimeString();
-    }
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    toggleListening() {
-        if (this.isListening) {
-            this.stopListening();
-        } else {
-            this.startListening();
-        }
-    }
-
-    async startListening() {
-        if (!this.recognition) {
-            alert('Speech recognition not supported in this browser');
-            return;
-        }
-
-        try {
-            this.recognition.start();
-            this.isListening = true;
-            this.listenBtn.classList.add('listening');
-            this.listenBtnText.textContent = 'Stop Listening';
-            this.listeningIndicator.classList.add('active');
-            this.debugLog('Started listening');
-
-            // Notify server that voice input is active
-            await this.updateVoiceInputState(true);
-        } catch (e) {
-            console.error('Failed to start recognition:', e);
-            alert('Failed to start speech recognition. Please try again.');
-        }
-    }
-
-    async stopListening() {
-        if (this.recognition) {
-            this.isListening = false;
-            this.recognition.stop();
-            this.listenBtn.classList.remove('listening');
-            this.listenBtnText.textContent = 'Start Listening';
-            this.listeningIndicator.classList.remove('active');
-            this.interimText.textContent = 'Start speaking and your words will appear here...';
-            this.interimText.classList.remove('active');
-            this.debugLog('Stopped listening');
-
-            // Notify server that voice input is no longer active
-            await this.updateVoiceInputState(false);
-        }
-    }
-
-    async sendVoiceUtterance(text) {
-        const trimmedText = text.trim();
-        if (!trimmedText) return;
-
-        this.debugLog('Sending voice utterance:', trimmedText);
-
-        try {
-            const response = await fetch(`${this.baseUrl}/api/potential-utterances`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    text: trimmedText,
-                    timestamp: new Date().toISOString()
-                }),
-            });
-
-            if (response.ok) {
-                this.loadData(); // Refresh the list
-            } else {
-                const error = await response.json();
-                console.error('Error sending voice utterance:', error);
-            }
-        } catch (error) {
-            console.error('Failed to send voice utterance:', error);
-        }
-    }
-
-    async clearAllUtterances() {
-
-        this.clearAllBtn.disabled = true;
-        this.clearAllBtn.textContent = 'Clearing...';
-
-        try {
-            const response = await fetch(`${this.baseUrl}/api/utterances`, {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                }
-            });
-
-            if (response.ok) {
-                const result = await response.json();
-                this.loadData(); // Refresh the list
-                this.debugLog('Cleared all utterances:', result);
-            } else {
-                const error = await response.json();
-                alert(`Error: ${error.error || 'Failed to clear utterances'}`);
-            }
-        } catch (error) {
-            console.error('Failed to clear utterances:', error);
-            alert('Failed to clear utterances. Make sure the server is running.');
-        } finally {
-            this.clearAllBtn.disabled = false;
-            this.clearAllBtn.textContent = 'Clear All';
-        }
     }
 
     debugLog(...args) {
@@ -397,15 +71,15 @@ class VoiceHooksClient {
 
         // Get available voices
         this.voices = [];
-        
+
         // Enhanced voice loading with deduplication
         const loadVoices = () => {
             const voices = window.speechSynthesis.getVoices();
-            
+
             // Deduplicate voices - keep the first occurrence of each unique voice
             const deduplicatedVoices = [];
             const seen = new Set();
-            
+
             voices.forEach(voice => {
                 // Create a unique key based on name, language, and URI
                 const key = `${voice.name}-${voice.lang}-${voice.voiceURI}`;
@@ -414,7 +88,7 @@ class VoiceHooksClient {
                     deduplicatedVoices.push(voice);
                 }
             });
-            
+
             this.voices = deduplicatedVoices;
             this.populateVoiceList();
         };
@@ -422,26 +96,20 @@ class VoiceHooksClient {
         // Load voices initially and with a delayed retry for reliability
         loadVoices();
         setTimeout(loadVoices, 100);
-        
+
         // Set up voice change listener
         if (window.speechSynthesis.onvoiceschanged !== undefined) {
             window.speechSynthesis.onvoiceschanged = loadVoices;
         }
-
-        // Set default voice preferences
-        this.speechRate = 1.0;
-        this.speechPitch = 1.0;
-        this.selectedVoice = 'system';
     }
 
     initializeTTSEvents() {
-        // Connect to Server-Sent Events endpoint
+        // Connect to SSE for TTS events
         this.eventSource = new EventSource(`${this.baseUrl}/api/tts-events`);
 
         this.eventSource.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                this.debugLog('TTS Event:', data);
 
                 if (data.type === 'speak' && data.text) {
                     this.speakText(data.text);
@@ -455,173 +123,17 @@ class VoiceHooksClient {
 
         this.eventSource.onerror = (error) => {
             console.error('SSE connection error:', error);
-            // Will automatically reconnect
-        };
-
-        this.eventSource.onopen = () => {
-            this.debugLog('TTS Events connected');
-            // Sync state when connection is established (includes reconnections)
-            this.syncStateWithServer();
         };
     }
 
-    populateLanguageFilter() {
-        if (!this.languageSelect || !this.voices) return;
-
-        // Get current selection
-        const currentSelection = this.languageSelect.value || 'en-US';
-
-        // Clear existing options
-        this.languageSelect.innerHTML = '';
-
-        // Add "All Languages" option
-        const allOption = document.createElement('option');
-        allOption.value = 'all';
-        allOption.textContent = 'All Languages';
-        this.languageSelect.appendChild(allOption);
-
-        // Collect unique language codes
-        const languageCodes = new Set();
-        this.voices.forEach(voice => {
-            languageCodes.add(voice.lang);
-        });
-
-        // Sort and add language codes
-        Array.from(languageCodes).sort().forEach(lang => {
-            const option = document.createElement('option');
-            option.value = lang;
-            option.textContent = lang;
-            this.languageSelect.appendChild(option);
-        });
-
-        // Restore selection
-        this.languageSelect.value = currentSelection;
-        if (this.languageSelect.value !== currentSelection) {
-            // If saved selection not available, default to en-US
-            this.languageSelect.value = 'en-US';
-        }
-    }
-
-    populateVoiceList() {
-        if (!this.voiceSelect || !this.localVoicesGroup || !this.cloudVoicesGroup) return;
-        
-
-        // First populate the language filter
-        this.populateLanguageFilter();
-
-        // Clear existing browser voice options
-        this.localVoicesGroup.innerHTML = '';
-        this.cloudVoicesGroup.innerHTML = '';
-
-        // List of voices to exclude (novelty, Eloquence, and non-premium voices)
-        const excludedVoices = [
-            // Eloquence voices
-            'Eddy', 'Flo', 'Grandma', 'Grandpa', 'Reed', 'Rocko', 'Sandy', 'Shelley',
-            // Novelty voices
-            'Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles', 'Cellos',
-            'Good News', 'Jester', 'Organ', 'Superstar', 'Trinoids', 'Whisper',
-            'Wobble', 'Zarvox',
-            // Voices without premium options
-            'Fred', 'Junior', 'Kathy', 'Ralph'
-        ];
-
-        // Get selected language filter
-        const selectedLanguage = this.languageSelect ? this.languageSelect.value : 'en-US';
-
-        // Filter voices based on selected language
-        this.voices.forEach((voice, index) => {
-            const voiceLang = voice.lang;
-            let shouldInclude = false;
-
-            if (selectedLanguage === 'all') {
-                // Include all languages
-                shouldInclude = true;
-            } else {
-                // Check if voice matches selected language/locale
-                shouldInclude = voiceLang === selectedLanguage;
-            }
-
-            if (shouldInclude) {
-                // Check if voice should be excluded
-                const voiceName = voice.name;
-                const isExcluded = excludedVoices.some(excluded =>
-                    voiceName.toLowerCase().startsWith(excluded.toLowerCase())
-                );
-
-                if (!isExcluded) {
-                    const option = document.createElement('option');
-                    option.value = `browser:${index}`;
-                    // Show voice name and language code
-                    option.textContent = `${voice.name} (${voice.lang})`;
-
-                    // Categorize voices
-                    if (voice.localService) {
-                        this.localVoicesGroup.appendChild(option);
-                        this.debugLog(voice.voiceURI);
-                    } else {
-                        this.cloudVoicesGroup.appendChild(option);
-                    }
-                }
-            }
-        });
-
-        // Hide empty groups
-        if (this.localVoicesGroup.children.length === 0) {
-            this.localVoicesGroup.style.display = 'none';
-        } else {
-            this.localVoicesGroup.style.display = '';
-        }
-
-        if (this.cloudVoicesGroup.children.length === 0) {
-            this.cloudVoicesGroup.style.display = 'none';
-        } else {
-            this.cloudVoicesGroup.style.display = '';
-        }
-
-        // Restore saved selection
-        const savedVoice = localStorage.getItem('selectedVoice');
-        if (savedVoice) {
-            this.voiceSelect.value = savedVoice;
-            this.selectedVoice = savedVoice;
-        } else {
-            // Look for Google US English Male voice first
-            let googleUSMaleIndex = -1;
-            let microsoftAndrewIndex = -1;
-
-            this.voices.forEach((voice, index) => {
-                const voiceName = voice.name.toLowerCase();
-
-                // Check for Google US English Male
-                if (voiceName.includes('google') &&
-                    voiceName.includes('us') &&
-                    voiceName.includes('english')) {
-                    googleUSMaleIndex = index;
-                }
-
-                // Check for Microsoft Andrew Online
-                if (voiceName.includes('microsoft') &&
-                    voiceName.includes('andrew') &&
-                    voiceName.includes('online')) {
-                    microsoftAndrewIndex = index;
-                }
-            });
-
-            if (googleUSMaleIndex !== -1) {
-                this.selectedVoice = `browser:${googleUSMaleIndex}`;
-                this.voiceSelect.value = this.selectedVoice;
-                this.debugLog('Defaulting to Google US English Male voice');
-            } else if (microsoftAndrewIndex !== -1) {
-                this.selectedVoice = `browser:${microsoftAndrewIndex}`;
-                this.voiceSelect.value = this.selectedVoice;
-                this.debugLog('Google US English Male not found, defaulting to Microsoft Andrew Online');
-            } else {
-                this.selectedVoice = 'system';
-                this.debugLog('Preferred voices not found, using system default');
+    handleWaitStatus(isWaiting) {
+        const waitingIndicator = document.getElementById('waitingIndicator');
+        if (waitingIndicator) {
+            waitingIndicator.style.display = isWaiting ? 'block' : 'none';
+            if (isWaiting) {
+                this.scrollToBottom();
             }
         }
-
-        // Update warnings based on selected voice
-        this.updateVoiceWarnings();
     }
 
     async speakText(text) {
@@ -631,9 +143,7 @@ class VoiceHooksClient {
             try {
                 const response = await fetch(`${this.baseUrl}/api/speak-system`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         text: text,
                         rate: Math.round(this.speechRate * 150) // Convert rate to words per minute
@@ -691,283 +201,644 @@ class VoiceHooksClient {
     }
 
     loadPreferences() {
-        // Simple localStorage with defaults to true
-        const storedVoiceResponses = localStorage.getItem('voiceResponsesEnabled');
-
-        // Default to true if not stored
-        const voiceResponsesEnabled = storedVoiceResponses !== null
-            ? storedVoiceResponses === 'true'
-            : true;
-
-        // Set the checkbox
-        this.voiceResponsesToggle.checked = voiceResponsesEnabled;
-
-        // Save to localStorage if this is first time
-        if (storedVoiceResponses === null) {
-            localStorage.setItem('voiceResponsesEnabled', 'true');
+        // Load voice responses preference from localStorage
+        const savedVoiceResponses = localStorage.getItem('voiceResponsesEnabled');
+        if (savedVoiceResponses !== null) {
+            const enabled = savedVoiceResponses === 'true';
+            this.voiceResponsesToggle.checked = enabled;
+            this.voiceOptions.style.display = enabled ? 'block' : 'none';
+            this.updateVoiceResponses(enabled);
         }
 
-        // Load voice settings
-        const storedRate = localStorage.getItem('speechRate');
-        if (storedRate !== null) {
-            this.speechRate = parseFloat(storedRate);
-            this.speechRateSlider.value = storedRate;
-            this.speechRateInput.value = this.speechRate.toFixed(1);
+        // Load voice selection
+        const savedVoice = localStorage.getItem('selectedVoice');
+        if (savedVoice) {
+            this.selectedVoice = savedVoice;
         }
 
-        // Load selected voice (will be applied after voices load)
-        this.selectedVoice = localStorage.getItem('selectedVoice') || 'system';
-
-        // Load selected language
-        const savedLanguage = localStorage.getItem('selectedLanguage');
-        if (savedLanguage && this.languageSelect) {
-            this.languageSelect.value = savedLanguage;
+        // Load speech rate
+        const savedRate = localStorage.getItem('speechRate');
+        if (savedRate) {
+            this.speechRate = parseFloat(savedRate);
+            if (this.speechRateSlider) this.speechRateSlider.value = this.speechRate.toString();
+            if (this.speechRateInput) this.speechRateInput.value = this.speechRate.toFixed(1);
         }
+    }
 
-        // Load send mode preferences
-        const savedSendMode = localStorage.getItem('sendMode');
-        if (savedSendMode === 'wait') {
-            this.sendMode = 'wait';
-            this.sendModeWait.checked = true;
+    populateLanguageFilter() {
+        if (!this.languageSelect || !this.voices) return;
+
+        const currentSelection = this.languageSelect.value || 'en-US';
+        this.languageSelect.innerHTML = '';
+
+        const allOption = document.createElement('option');
+        allOption.value = 'all';
+        allOption.textContent = 'All Languages';
+        this.languageSelect.appendChild(allOption);
+
+        const languageCodes = new Set();
+        this.voices.forEach(voice => {
+            languageCodes.add(voice.lang);
+        });
+
+        Array.from(languageCodes).sort().forEach(lang => {
+            const option = document.createElement('option');
+            option.value = lang;
+            option.textContent = lang;
+            this.languageSelect.appendChild(option);
+        });
+
+        this.languageSelect.value = currentSelection;
+        if (this.languageSelect.value !== currentSelection) {
+            this.languageSelect.value = 'en-US';
+        }
+    }
+
+    populateVoiceList() {
+        if (!this.voiceSelect || !this.localVoicesGroup || !this.cloudVoicesGroup) return;
+
+        this.populateLanguageFilter();
+
+        this.localVoicesGroup.innerHTML = '';
+        this.cloudVoicesGroup.innerHTML = '';
+
+        const excludedVoices = [
+            'Eddy', 'Flo', 'Grandma', 'Grandpa', 'Reed', 'Rocko', 'Sandy', 'Shelley',
+            'Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles', 'Cellos',
+            'Good News', 'Jester', 'Organ', 'Superstar', 'Trinoids', 'Whisper',
+            'Wobble', 'Zarvox', 'Fred', 'Junior', 'Kathy', 'Ralph'
+        ];
+
+        const selectedLanguage = this.languageSelect ? this.languageSelect.value : 'en-US';
+
+        this.voices.forEach((voice, index) => {
+            const voiceLang = voice.lang;
+            let shouldInclude = selectedLanguage === 'all' || voiceLang === selectedLanguage;
+
+            if (shouldInclude) {
+                const voiceName = voice.name;
+                const isExcluded = excludedVoices.some(excluded =>
+                    voiceName.toLowerCase().startsWith(excluded.toLowerCase())
+                );
+
+                if (!isExcluded) {
+                    const option = document.createElement('option');
+                    option.value = `browser:${index}`;
+                    option.textContent = `${voice.name} (${voice.lang})`;
+
+                    if (voice.localService) {
+                        this.localVoicesGroup.appendChild(option);
+                    } else {
+                        this.cloudVoicesGroup.appendChild(option);
+                    }
+                }
+            }
+        });
+
+        if (this.localVoicesGroup.children.length === 0) {
+            this.localVoicesGroup.style.display = 'none';
         } else {
-            this.sendMode = 'automatic';
-            this.sendModeAutomatic.checked = true;
+            this.localVoicesGroup.style.display = '';
         }
 
-        // Load trigger word
-        const savedTriggerWord = localStorage.getItem('triggerWord');
-        if (savedTriggerWord) {
-            this.triggerWord = savedTriggerWord;
-            this.triggerWordInput.value = savedTriggerWord;
+        if (this.cloudVoicesGroup.children.length === 0) {
+            this.cloudVoicesGroup.style.display = 'none';
+        } else {
+            this.cloudVoicesGroup.style.display = '';
         }
 
-        // Update UI visibility
-        this.updateVoiceOptionsVisibility();
-        this.updateSendModeUI();
+        // Restore selection or find default
+        if (this.selectedVoice) {
+            this.voiceSelect.value = this.selectedVoice;
+        }
 
-        // Send preferences to server
-        this.updateVoicePreferences();
-
-        // Update warnings after preferences are loaded
         this.updateVoiceWarnings();
     }
 
-    updateVoiceOptionsVisibility() {
-        const voiceResponsesEnabled = this.voiceResponsesToggle.checked;
-        this.voiceOptions.style.display = voiceResponsesEnabled ? 'flex' : 'none';
-    }
-
-    async updateVoicePreferences() {
-        const voiceResponsesEnabled = this.voiceResponsesToggle.checked;
-
-        try {
-            // Send preferences to server
-            await fetch(`${this.baseUrl}/api/voice-preferences`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    voiceResponsesEnabled
-                }),
-            });
-
-            this.debugLog('Voice preferences updated:', { voiceResponsesEnabled });
-        } catch (error) {
-            console.error('Failed to update voice preferences:', error);
-        }
-    }
-
-    async updateVoiceInputState(active) {
-        try {
-            // Send voice input state to server
-            await fetch(`${this.baseUrl}/api/voice-input-state`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ active }),
-            });
-
-            this.debugLog('Voice input state updated:', { active });
-        } catch (error) {
-            console.error('Failed to update voice input state:', error);
-        }
-    }
-
-    async syncStateWithServer() {
-        this.debugLog('Syncing state with server after reconnection');
-
-        // Sync voice response preferences
-        await this.updateVoicePreferences();
-
-        // Sync voice input state if currently listening
-        if (this.isListening) {
-            await this.updateVoiceInputState(true);
-        }
-    }
-
     updateVoiceWarnings() {
-        // Show/hide warnings based on selected voice
         if (this.selectedVoice === 'system') {
-            // Show system voice info for Mac System Voice
             this.systemVoiceInfo.style.display = 'flex';
             this.rateWarning.style.display = 'none';
         } else if (this.selectedVoice && this.selectedVoice.startsWith('browser:')) {
-            // Check voice properties
             const voiceIndex = parseInt(this.selectedVoice.substring(8));
             const voice = this.voices[voiceIndex];
 
             if (voice) {
                 const isGoogleVoice = voice.name.toLowerCase().includes('google');
-                const isLocalVoice = voice.localService === true;
-
-                // Show appropriate warnings
-                if (isGoogleVoice) {
-                    // Show rate warning for Google voices
-                    this.rateWarning.style.display = 'flex';
-                } else {
-                    this.rateWarning.style.display = 'none';
-                }
-
-                if (isLocalVoice) {
-                    // Show system info for local browser voices
-                    this.systemVoiceInfo.style.display = 'flex';
-                } else {
-                    this.systemVoiceInfo.style.display = 'none';
-                }
+                this.rateWarning.style.display = isGoogleVoice ? 'flex' : 'none';
+                this.systemVoiceInfo.style.display = voice.localService ? 'flex' : 'none';
             } else {
-                // Hide both warnings if voice not found
                 this.rateWarning.style.display = 'none';
                 this.systemVoiceInfo.style.display = 'none';
             }
         } else {
-            // Hide both warnings if no voice selected
             this.rateWarning.style.display = 'none';
             this.systemVoiceInfo.style.display = 'none';
         }
     }
 
-    handleWaitStatus(isWaiting) {
-        const listeningIndicatorText = this.listeningIndicator.querySelector('span');
+    setupEventListeners() {
+        // Text input events
+        this.messageInput.addEventListener('keydown', (e) => this.handleTextInputKeydown(e));
+        this.messageInput.addEventListener('input', () => this.autoGrowTextarea());
 
-        if (isWaiting) {
-            // Claude is waiting for voice input
-            listeningIndicatorText.textContent = 'Claude is paused and waiting for voice input';
-            this.debugLog('Claude is waiting for voice input');
-        } else {
-            // Back to normal listening state
-            listeningIndicatorText.textContent = 'Listening...';
-            this.debugLog('Claude finished waiting');
-        }
-    }
+        // Microphone button
+        this.micBtn.addEventListener('click', () => this.toggleVoiceDictation());
 
-    queueUtterance(text) {
-        const trimmedText = text.trim();
-        if (!trimmedText) return;
+        // Send mode radio buttons
+        this.sendModeRadios.forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                this.sendMode = e.target.value;
+                this.triggerWordInputContainer.style.display =
+                    this.sendMode === 'trigger' ? 'flex' : 'none';
+            });
+        });
 
-        // Check for trigger word (case-insensitive)
-        const hasTriggerWord = this.triggerWord &&
-            trimmedText.toLowerCase().includes(this.triggerWord.toLowerCase());
+        // Trigger word input
+        this.triggerWordInput.addEventListener('input', (e) => {
+            this.triggerWord = e.target.value.trim().toLowerCase();
+        });
 
-        if (hasTriggerWord) {
-            // Remove the trigger word from the text
-            const regex = new RegExp(`\\b${this.triggerWord}\\b`, 'gi');
-            const cleanedText = trimmedText.replace(regex, '').trim();
-
-            // Add the cleaned text to the queue if it's not empty
-            if (cleanedText) {
-                this.utteranceQueue.push(cleanedText);
+        // Settings toggle
+        this.settingsToggleHeader.addEventListener('click', () => {
+            const arrow = this.settingsToggleHeader.querySelector('.toggle-arrow');
+            if (this.settingsContent.classList.contains('open')) {
+                this.settingsContent.classList.remove('open');
+                arrow.classList.remove('open');
+            } else {
+                this.settingsContent.classList.add('open');
+                arrow.classList.add('open');
             }
+        });
 
-            this.debugLog('Trigger word detected, sending queued utterances');
-            this.sendQueuedUtterances();
-        } else {
-            // Just queue it
-            this.utteranceQueue.push(trimmedText);
-            this.updateQueuedUtterancesUI();
-            this.debugLog('Queued utterance:', trimmedText);
+        // Voice responses toggle
+        this.voiceResponsesToggle.addEventListener('change', async (e) => {
+            const enabled = e.target.checked;
+            await this.updateVoiceResponses(enabled);
+            // Show/hide voice options based on toggle
+            this.voiceOptions.style.display = enabled ? 'block' : 'none';
+        });
+
+        // Voice selection
+        this.voiceSelect.addEventListener('change', (e) => {
+            this.selectedVoice = e.target.value;
+            localStorage.setItem('selectedVoice', this.selectedVoice);
+            this.updateVoiceWarnings();
+        });
+
+        // Language filter
+        if (this.languageSelect) {
+            this.languageSelect.addEventListener('change', () => {
+                this.populateVoiceList();
+            });
+        }
+
+        // Speech rate slider
+        if (this.speechRateSlider) {
+            this.speechRateSlider.addEventListener('input', (e) => {
+                this.speechRate = parseFloat(e.target.value);
+                this.speechRateInput.value = this.speechRate.toFixed(1);
+                localStorage.setItem('speechRate', this.speechRate.toString());
+            });
+        }
+
+        // Speech rate text input
+        if (this.speechRateInput) {
+            this.speechRateInput.addEventListener('input', (e) => {
+                let value = parseFloat(e.target.value);
+                if (!isNaN(value)) {
+                    value = Math.max(0.5, Math.min(5, value));
+                    this.speechRate = value;
+                    this.speechRateSlider.value = value.toString();
+                    this.speechRateInput.value = value.toFixed(1);
+                    localStorage.setItem('speechRate', this.speechRate.toString());
+                }
+            });
+        }
+
+        // Test TTS button
+        if (this.testTTSBtn) {
+            this.testTTSBtn.addEventListener('click', () => {
+                this.speakText('This is Voice Mode for Claude Code. How can I help you today?');
+            });
         }
     }
 
-    async sendQueuedUtterances() {
-        if (this.utteranceQueue.length === 0) {
-            this.debugLog('No utterances to send');
+    async loadData() {
+        try {
+            // Load full conversation
+            const conversationResponse = await fetch(`${this.baseUrl}/api/conversation?limit=50`);
+            if (conversationResponse.ok) {
+                const data = await conversationResponse.json();
+                this.updateConversation(data.messages);
+            }
+        } catch (error) {
+            console.error('Failed to load data:', error);
+        }
+    }
+
+    updateConversation(messages) {
+        const container = this.conversationMessages;
+        const emptyState = container.querySelector('.empty-state');
+
+        if (messages.length === 0) {
+            emptyState.style.display = 'flex';
+            container.querySelectorAll('.message-bubble').forEach(el => el.remove());
             return;
         }
 
-        // Combine all queued utterances into one message
-        const combinedText = this.utteranceQueue.join(' ');
+        emptyState.style.display = 'none';
 
-        this.debugLog('Sending queued utterances:', combinedText);
+        // Get existing message IDs to avoid duplicates
+        const existingBubbles = container.querySelectorAll('.message-bubble');
+        const existingIds = new Set();
+        existingBubbles.forEach(bubble => {
+            if (bubble.dataset.messageId) {
+                existingIds.add(bubble.dataset.messageId);
+            }
+        });
 
+        // Get waiting indicator to insert messages before it
+        const waitingIndicator = container.querySelector('.waiting-indicator');
+
+        // Only render new messages and update status for existing ones
+        messages.forEach(message => {
+            if (!existingIds.has(message.id)) {
+                // New message - create bubble and insert before waiting indicator
+                const bubble = this.createMessageBubble(message);
+                if (waitingIndicator) {
+                    container.insertBefore(bubble, waitingIndicator);
+                } else {
+                    container.appendChild(bubble);
+                }
+            } else {
+                // Existing message - update status if it's a user message
+                if (message.role === 'user' && message.status) {
+                    const bubble = container.querySelector(`[data-message-id="${message.id}"]`);
+                    if (bubble) {
+                        const statusEl = bubble.querySelector('.message-status');
+                        if (statusEl) {
+                            // Check if status changed from pending to something else
+                            const wasPending = statusEl.classList.contains('pending');
+                            const isPending = message.status === 'pending';
+
+                            if (wasPending && !isPending) {
+                                // Status changed from pending - remove delete button
+                                const deleteBtn = statusEl.querySelector('.delete-message-btn');
+                                if (deleteBtn) {
+                                    deleteBtn.remove();
+                                }
+                            }
+
+                            // Update status class and text
+                            statusEl.className = `message-status ${message.status}`;
+                            const statusText = statusEl.querySelector('span:last-child');
+                            if (statusText) {
+                                statusText.textContent = message.status.toUpperCase();
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        this.scrollToBottom();
+    }
+
+    createMessageBubble(message) {
+        const bubble = document.createElement('div');
+        bubble.className = `message-bubble ${message.role}`;
+        bubble.dataset.messageId = message.id;
+
+        const messageText = document.createElement('div');
+        messageText.className = 'message-text';
+        messageText.textContent = message.text;
+
+        const messageMeta = document.createElement('div');
+        messageMeta.className = 'message-meta';
+
+        const timestamp = document.createElement('span');
+        timestamp.className = 'message-timestamp';
+        timestamp.textContent = this.formatTimestamp(message.timestamp);
+        messageMeta.appendChild(timestamp);
+
+        // Only show status for user messages
+        if (message.role === 'user' && message.status) {
+            const statusContainer = document.createElement('div');
+            statusContainer.className = `message-status ${message.status}`;
+
+            // Add delete button for pending messages (shows on hover)
+            if (message.status === 'pending') {
+                const deleteBtn = document.createElement('span');
+                deleteBtn.className = 'delete-message-btn';
+                deleteBtn.innerHTML = `
+                    <svg class="delete-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                        <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                    </svg>
+                `;
+                deleteBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    this.deleteMessage(message.id);
+                };
+                statusContainer.appendChild(deleteBtn);
+            }
+
+            const statusText = document.createElement('span');
+            statusText.textContent = message.status.toUpperCase();
+            statusContainer.appendChild(statusText);
+
+            messageMeta.appendChild(statusContainer);
+        }
+
+        bubble.appendChild(messageText);
+        bubble.appendChild(messageMeta);
+
+        return bubble;
+    }
+
+    scrollToBottom() {
+        this.conversationContainer.scrollTo({
+            top: this.conversationContainer.scrollHeight,
+            behavior: 'smooth'
+        });
+    }
+
+    formatTimestamp(timestamp) {
+        const date = new Date(timestamp);
+        return date.toLocaleTimeString();
+    }
+
+    // Text input handling
+    handleTextInputKeydown(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            this.sendTypedMessage();
+        }
+        // Shift+Enter allows new line
+    }
+
+    autoGrowTextarea() {
+        const textarea = this.messageInput;
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    }
+
+    async sendTypedMessage() {
+        const text = this.messageInput.value.trim();
+        if (!text || this.isInterimText) return;
+
+        this.messageInput.value = '';
+        this.messageInput.style.height = 'auto';
+
+        await this.sendMessage(text);
+    }
+
+    async sendMessage(text) {
         try {
             const response = await fetch(`${this.baseUrl}/api/potential-utterances`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    text: combinedText,
-                    timestamp: new Date().toISOString()
-                }),
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, timestamp: new Date().toISOString() })
             });
 
             if (response.ok) {
-                // Clear the queue after successful send
-                this.utteranceQueue = [];
-                this.updateQueuedUtterancesUI();
-                this.loadData(); // Refresh the list
-            } else {
-                const error = await response.json();
-                console.error('Error sending queued utterances:', error);
+                this.loadData();
             }
         } catch (error) {
-            console.error('Failed to send queued utterances:', error);
+            console.error('Failed to send message:', error);
         }
     }
 
-    updateSendModeUI() {
-        if (this.sendMode === 'wait') {
-            // Show trigger word controls and queued utterances section
-            this.triggerWordControls.style.display = 'block';
-            this.queuedUtterancesSection.style.display = 'block';
+    // Voice dictation
+    toggleVoiceDictation() {
+        if (this.isListening) {
+            this.stopVoiceDictation();
         } else {
-            // Hide trigger word controls and queued utterances section
-            this.triggerWordControls.style.display = 'none';
-            this.queuedUtterancesSection.style.display = 'none';
+            this.startVoiceDictation();
+        }
+    }
 
-            // Clear queue when switching to automatic mode
-            if (this.utteranceQueue.length > 0) {
-                // Ask if user wants to send queued utterances before switching
-                if (confirm('You have queued utterances. Send them before switching to automatic mode?')) {
-                    this.sendQueuedUtterances();
+    async startVoiceDictation() {
+        if (!this.recognition) {
+            alert('Speech recognition not supported in this browser');
+            return;
+        }
+
+        try {
+            if (this.isInterimText) {
+                this.messageInput.value = '';
+                this.isInterimText = false;
+            }
+
+            this.recognition.start();
+            this.isListening = true;
+            this.micBtn.classList.add('listening');
+
+            // Activate voice input when mic is on
+            await this.updateVoiceInputState(true);
+        } catch (e) {
+            console.error('Failed to start recognition:', e);
+            alert('Failed to start speech recognition');
+        }
+    }
+
+    async stopVoiceDictation() {
+        if (this.recognition) {
+            this.isListening = false;
+            this.recognition.stop();
+            this.micBtn.classList.remove('listening');
+
+            // Send any accumulated text in the input
+            const text = this.messageInput.value.trim();
+            if (text) {
+                // In trigger mode, check for trigger word
+                if (this.sendMode === 'trigger') {
+                    if (this.containsTriggerWord(text)) {
+                        const textToSend = this.removeTriggerWord(text);
+                        await this.sendMessage(textToSend);
+                        this.messageInput.value = '';
+                    }
+                    // If no trigger word, keep text in input for user to continue
                 } else {
-                    this.utteranceQueue = [];
+                    // In automatic mode, send the text
+                    await this.sendMessage(text);
+                    this.messageInput.value = '';
                 }
             }
+
+            this.isInterimText = false;
+            this.messageInput.style.height = 'auto';
+
+            // Deactivate voice input when mic is turned off
+            await this.updateVoiceInputState(false);
         }
-        this.updateQueuedUtterancesUI();
     }
 
-    updateQueuedUtterancesUI() {
-        this.queuedCount.textContent = this.utteranceQueue.length;
+    initializeSpeechRecognition() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-        if (this.utteranceQueue.length === 0) {
-            this.queuedUtterancesList.innerHTML = '<div style="color: #999; font-style: italic; font-size: 13px;">No messages queued</div>';
-        } else {
-            this.queuedUtterancesList.innerHTML = this.utteranceQueue
-                .map((utterance, index) => `
-                    <div style="padding: 6px 0; border-bottom: 1px solid #ddd; font-size: 13px;">
-                        ${index + 1}. ${this.escapeHtml(utterance)}
-                    </div>
-                `)
-                .join('');
+        if (!SpeechRecognition) {
+            console.error('Speech recognition not supported');
+            this.micBtn.disabled = true;
+            return;
+        }
+
+        this.recognition = new SpeechRecognition();
+        this.recognition.continuous = true;
+        this.recognition.interimResults = true;
+        this.recognition.lang = 'en-US';
+
+        this.recognition.onresult = (event) => {
+            let interimTranscript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+
+                if (event.results[i].isFinal) {
+                    // User paused
+                    this.isInterimText = false;
+
+                    if (this.sendMode === 'automatic') {
+                        // Send immediately
+                        const finalText = this.messageInput.value.trim();
+                        this.sendMessage(finalText);
+                        this.messageInput.value = '';
+                        this.accumulatedText = '';
+                    } else {
+                        // Trigger word mode: accumulate until trigger word
+                        // Use the previously saved accumulated text (before interim was shown)
+                        const previouslyAccumulated = this.accumulatedText || '';
+                        const newUtterance = transcript.trim();
+
+                        // Check if this new utterance contains the trigger word
+                        if (this.containsTriggerWord(newUtterance)) {
+                            // Send everything accumulated plus this utterance (minus trigger word)
+                            const combined = previouslyAccumulated
+                                ? previouslyAccumulated + ' ' + newUtterance
+                                : newUtterance;
+                            const textToSend = this.removeTriggerWord(combined).trim();
+                            if (textToSend) {
+                                this.sendMessage(textToSend);
+                            }
+                            this.messageInput.value = '';
+                            this.accumulatedText = '';
+                        } else {
+                            // No trigger word - append with space (no newlines)
+                            const newAccumulated = previouslyAccumulated
+                                ? previouslyAccumulated + ' ' + newUtterance
+                                : newUtterance;
+                            this.messageInput.value = newAccumulated;
+                            this.accumulatedText = newAccumulated;
+                            this.autoGrowTextarea();
+                        }
+                    }
+                } else {
+                    // Still speaking
+                    interimTranscript += transcript;
+                }
+            }
+
+            if (interimTranscript) {
+                // In trigger mode, preserve accumulated text and append interim
+                if (this.sendMode === 'trigger' && this.accumulatedText) {
+                    // Show accumulated + interim with single space
+                    this.messageInput.value = this.accumulatedText + ' ' + interimTranscript.trim();
+                } else {
+                    // Show just interim
+                    this.messageInput.value = interimTranscript;
+                }
+
+                this.isInterimText = true;
+                this.autoGrowTextarea();
+            }
+        };
+
+        this.recognition.onerror = (event) => {
+            if (event.error !== 'no-speech') {
+                console.error('Speech error:', event.error);
+                this.stopVoiceDictation();
+            }
+        };
+
+        this.recognition.onend = () => {
+            if (this.isListening) {
+                try {
+                    this.recognition.start();
+                } catch (e) {
+                    console.error('Failed to restart recognition:', e);
+                    this.stopVoiceDictation();
+                }
+            }
+        };
+    }
+
+    containsTriggerWord(text) {
+        if (!this.triggerWord) return false;
+        const words = text.toLowerCase().split(/\s+/);
+        return words.includes(this.triggerWord.toLowerCase());
+    }
+
+    removeTriggerWord(text) {
+        if (!this.triggerWord) return text;
+        const words = text.split(/\s+/);
+        const filtered = words.filter(w => w.toLowerCase() !== this.triggerWord.toLowerCase());
+        return filtered.join(' ');
+    }
+
+    async deleteMessage(messageId) {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/utterances/${messageId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                // Remove the message bubble from DOM immediately
+                const bubble = this.conversationMessages.querySelector(`[data-message-id="${messageId}"]`);
+                if (bubble) {
+                    bubble.remove();
+                }
+                // Refresh to sync with server
+                this.loadData();
+            } else {
+                const error = await response.json();
+                console.error('Failed to delete message:', error);
+                alert(`Failed to delete: ${error.error || 'Unknown error'}`);
+            }
+        } catch (error) {
+            console.error('Failed to delete message:', error);
+        }
+    }
+
+    async updateVoiceInputState(active) {
+        try {
+            await fetch(`${this.baseUrl}/api/voice-input-state`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ active })
+            });
+        } catch (error) {
+            console.error('Failed to update voice input state:', error);
+        }
+    }
+
+    async updateVoiceResponses(enabled) {
+        try {
+            // Save to localStorage
+            localStorage.setItem('voiceResponsesEnabled', enabled.toString());
+
+            // Update server
+            await fetch(`${this.baseUrl}/api/voice-preferences`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ voiceResponsesEnabled: enabled })
+            });
+        } catch (error) {
+            console.error('Failed to update voice responses:', error);
         }
     }
 }
 
-// Initialize the client when the page loads
+// Initialize when page loads
 document.addEventListener('DOMContentLoaded', () => {
-    new VoiceHooksClient();
+    new MessengerClient();
 });

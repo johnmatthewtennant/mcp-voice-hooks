@@ -1,382 +1,509 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voice Mode for Claude Code</title>
+    <title>Voice Mode for Claude Code - Messenger</title>
     <style>
+        * {
+            box-sizing: border-box;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
+            margin: 0;
+            padding: 0;
             background-color: #f5f5f5;
+            height: 100vh;
+            overflow: hidden;
         }
 
-        .container {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
-        }
-
-        h1 {
-            color: #333;
-            margin-bottom: 8px;
-        }
-
-        .subtitle {
-            color: #666;
-            margin-bottom: 24px;
-        }
-
-        .input-section {
-            margin-bottom: 24px;
-        }
-
-        .input-group {
+        .app-container {
             display: flex;
-            gap: 12px;
-            margin-bottom: 16px;
+            flex-direction: column;
+            height: 100vh;
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
         }
 
-        #utteranceInput {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            font-size: 16px;
-        }
-
-        #utteranceInput:focus {
-            outline: none;
-            border-color: #007AFF;
-        }
-
-        #sendBtn {
-            background: #007AFF;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-size: 16px;
-            cursor: pointer;
-        }
-
-        #sendBtn:hover {
-            background: #0056CC;
-        }
-
-        #sendBtn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-
-        .utterances-section h3 {
-            color: #333;
-            margin-bottom: 16px;
-        }
-
-        .utterances-list {
-            max-height: 400px;
-            overflow-y: auto;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-        }
-
-        .utterance-item {
-            padding: 12px 16px;
-            border-bottom: 1px solid #eee;
+        /* Header - Neo-Brutalist Style */
+        .app-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            padding: 20px;
+            background: #E0E0E0;
+            color: #000;
+            border-bottom: 6px solid #666;
+            box-shadow: 8px 8px 0 #666;
         }
 
-        .utterance-item:last-child {
-            border-bottom: none;
+        .app-header h1 {
+            margin: 0;
+            font-family: 'Courier New', 'Courier', monospace;
+            font-size: 24px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: -1px;
         }
 
-        .utterance-text {
-            flex: 1;
-            margin-right: 12px;
-        }
-
-        .utterance-meta {
+        .legacy-link {
+            color: #666;
+            text-decoration: none;
+            font-family: 'Courier New', 'Courier', monospace;
             font-size: 12px;
-            color: #666;
-            text-align: right;
+            font-weight: 400;
+            white-space: nowrap;
         }
 
-        .utterance-status {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: bold;
-            margin-top: 4px;
+        .legacy-link:hover {
+            text-decoration: underline;
         }
 
-        .status-pending {
-            background: #FFF3CD;
-            color: #856404;
-        }
-
-        .status-delivered {
-            background: #D1ECF1;
-            color: #0C5460;
-        }
-
-        .refresh-btn {
-            background: #6C757D;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 6px;
-            font-size: 14px;
-            cursor: pointer;
-            margin-left: 12px;
-        }
-
-        .refresh-btn:hover {
-            background: #545B62;
-        }
-
-        .empty-state {
-            text-align: center;
-            color: #666;
-            padding: 12px 16px;
-            font-style: italic;
-        }
-
-        .voice-controls {
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
             display: flex;
-            gap: 12px;
-            align-items: center;
-            margin-bottom: 16px;
+            flex-direction: column;
+            overflow: hidden;
         }
 
-        #listenBtn {
-            background: #28A745;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 8px;
+        /* Conversation Section */
+        .conversation-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .conversation-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 20px;
+            border-bottom: 1px solid #E0E0E0;
+            background: #FAFAFA;
+        }
+
+        .conversation-title {
             font-size: 16px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .conversation-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .icon-button {
+            background: white;
+            border: 1px solid #DDD;
+            border-radius: 6px;
+            padding: 8px;
             cursor: pointer;
             display: flex;
             align-items: center;
-            gap: 8px;
+            justify-content: center;
+            transition: all 0.2s;
         }
 
-        #listenBtn:hover {
-            background: #218838;
+        .icon-button:hover {
+            background: #F0F0F0;
+            border-color: #BBB;
         }
 
-        #listenBtn.listening {
-            background: #DC3545;
+        .icon-button.danger:hover {
+            background: #FFEBEE;
+            border-color: #EF5350;
         }
 
-        #listenBtn.listening:hover {
-            background: #C82333;
+        .icon-button svg {
+            fill: #666;
         }
 
-        #listenBtn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
+        .icon-button.danger:hover svg {
+            fill: #EF5350;
         }
 
-        .listening-indicator {
-            display: none;
+        /* Conversation Container */
+        .conversation-container {
+            flex: 1;
+            overflow-y: auto;
+            background: #F5F5F5;
+            position: relative;
+        }
+
+        .conversation-messages {
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            gap: 12px;
+            min-height: 100%;
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #999;
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .empty-state svg {
+            margin-bottom: 16px;
+        }
+
+        .empty-state p {
+            margin: 0;
+            font-size: 16px;
+        }
+
+        /* Waiting Indicator */
+        .waiting-indicator {
+            text-align: center;
+            color: #999;
+            font-size: 14px;
+            font-style: italic;
+            padding: 12px 20px;
+            margin-top: 8px;
+        }
+
+        /* Message Bubbles */
+        .message-bubble {
+            max-width: 70%;
+            padding: 10px 14px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            position: relative;
+            animation: messageSlideIn 0.2s ease-out;
+        }
+
+        @keyframes messageSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* User Messages (Right Side, Blue) */
+        .message-bubble.user {
+            align-self: flex-end;
+            background: #007AFF;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        /* Assistant Messages (Left Side, Gray) */
+        .message-bubble.assistant {
+            align-self: flex-start;
+            background: #E5E5EA;
+            color: #000;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-text {
+            font-size: 15px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+
+        .message-meta {
+            display: flex;
+            justify-content: space-between;
             align-items: center;
             gap: 8px;
-            color: #DC3545;
-            font-weight: 500;
+            margin-top: 6px;
+            font-size: 11px;
+            opacity: 0.7;
         }
 
-        .listening-indicator.active {
+        .message-bubble.user .message-meta {
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .message-bubble.assistant .message-meta {
+            color: rgba(0, 0, 0, 0.5);
+        }
+
+        .message-timestamp {
+            white-space: nowrap;
+        }
+
+        .message-status {
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
             display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
-        .listening-dot {
-            width: 8px;
-            height: 8px;
-            background: #DC3545;
-            border-radius: 50%;
-            animation: pulse 1.5s infinite;
+        .delete-message-btn {
+            cursor: pointer;
+            opacity: 0.5;
+            transition: opacity 0.2s;
         }
 
-        @keyframes pulse {
-            0% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.3;
-            }
-
-            100% {
-                opacity: 1;
-            }
+        .delete-message-btn:hover {
+            opacity: 1;
         }
 
-        .interim-text {
-            padding: 12px;
-            background: #F8F9FA;
-            border: 1px solid #DEE2E6;
-            border-radius: 8px;
-            margin-bottom: 16px;
-            font-style: italic;
-            color: #6C757D;
-            min-height: 44px;
-            /* Maintain minimum height to prevent collapse */
-            max-height: 120px;
-            /* Prevent excessive growth */
-            overflow-y: auto;
-            /* Add scroll if content is too long */
-            transition: color 0.2s ease-in-out;
-        }
-
-        .interim-text.active {
-            color: #333;
-            /* Darker color for actual speech */
-            font-style: normal;
-        }
-
-        .mic-icon {
-            width: 16px;
-            height: 16px;
+        .delete-icon {
+            width: 14px;
+            height: 14px;
             fill: currentColor;
         }
 
-        .tts-settings {
-            background: #f8f9fa;
-            padding: 12px;
-            border-radius: 8px;
-            margin-bottom: 24px;
+        /* Status Colors for User Messages */
+        .message-bubble.user .message-status.pending {
+            color: #FFE082;
         }
 
-        .tts-settings h4 {
-            margin-top: 0;
-            margin-bottom: 0;
-            color: #333;
+        .message-bubble.user .message-status.delivered {
+            color: #B3E5FC;
         }
 
-        .tts-controls {
+        .message-bubble.user .message-status.responded {
+            color: #C8E6C9;
+        }
+
+        /* Scrollbar Styling */
+        .conversation-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .conversation-container::-webkit-scrollbar-track {
+            background: #F5F5F5;
+        }
+
+        .conversation-container::-webkit-scrollbar-thumb {
+            background: #CCC;
+            border-radius: 4px;
+        }
+
+        .conversation-container::-webkit-scrollbar-thumb:hover {
+            background: #AAA;
+        }
+
+        /* Input Section */
+        .input-section {
+            border-top: 1px solid #E0E0E0;
+            background: white;
+            padding: 16px 20px;
+        }
+
+        /* Send Mode Controls */
+        .send-mode-controls {
             display: flex;
+            align-items: center;
             gap: 16px;
-            align-items: center;
-            flex-wrap: wrap;
-            width: 100%;
-            box-sizing: border-box;
-            margin-top: 16px;
+            margin-bottom: 12px;
+            padding: 8px;
+            background: #F8F9FA;
+            border-radius: 8px;
         }
 
-        .tts-control {
+        .send-mode-radio {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
         }
 
-        .tts-control label {
-            font-size: 14px;
-            color: #666;
-        }
-
-        .tts-control select {
-            padding: 6px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-            width: 100%;
-            box-sizing: border-box;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        
-        .tts-control input {
-            padding: 6px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-            box-sizing: border-box;
-        }
-
-        .tts-test-btn {
-            background: #6C757D;
-            color: white;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 4px;
-            font-size: 14px;
+        .send-mode-radio input[type="radio"] {
             cursor: pointer;
         }
 
-        .tts-test-btn:hover {
-            background: #545B62;
+        .send-mode-radio label {
+            font-size: 14px;
+            color: #666;
+            cursor: pointer;
         }
 
-        .rate-warning,
-        .system-voice-info {
-            font-size: 12px;
-            padding: 8px 12px;
-            border-radius: 6px;
-            margin: 8px 0;
+        .trigger-word-input {
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
-        .rate-warning {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeaa7;
+        .trigger-word-input label {
+            font-size: 13px;
+            color: #666;
         }
 
-        .system-voice-info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
+        .trigger-word-input input {
+            padding: 4px 8px;
+            border: 1px solid #DDD;
+            border-radius: 4px;
+            font-size: 13px;
+            width: 120px;
         }
 
-        .system-voice-info a {
-            color: #0c5460;
-            font-weight: bold;
+        /* Text Input Container */
+        .input-container {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            background: #F8F9FA;
+            border: 2px solid #E0E0E0;
+            border-radius: 24px;
+            padding: 8px 8px 8px 16px;
+            transition: border-color 0.2s;
         }
 
-        .warning-icon,
-        .info-icon {
-            font-size: 16px;
+        .input-container:focus-within {
+            border-color: #007AFF;
         }
 
-        .info-message {
-            background: #d1ecf1;
-            border: 1px solid #bee5eb;
+        /* Text Input */
+        .message-input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            resize: none;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 15px;
+            line-height: 1.4;
+            padding: 6px 0;
+            max-height: 120px;
+            overflow-y: auto;
+            outline: none;
+        }
+
+        .message-input::placeholder {
+            color: #999;
+        }
+
+        /* Microphone Button */
+        .mic-button {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: none;
+            background: #007AFF;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+
+        .mic-button:hover {
+            background: #0051D5;
+            transform: scale(1.05);
+        }
+
+        .mic-button:active {
+            transform: scale(0.95);
+        }
+
+        .mic-button.listening {
+            background: #EF5350;
+            animation: micPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes micPulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(239, 83, 80, 0.7);
+            }
+            50% {
+                box-shadow: 0 0 0 8px rgba(239, 83, 80, 0);
+            }
+        }
+
+        .mic-icon {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        /* Listening Indicator */
+        /* Settings Toggle */
+        .settings-toggle {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #E0E0E0;
+        }
+
+        .toggle-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+
+        .toggle-header:hover {
+            background: #F8F9FA;
+        }
+
+        .toggle-header h3 {
+            margin: 0;
+            font-size: 15px;
+            color: #666;
+        }
+
+        .toggle-arrow {
+            transition: transform 0.2s;
+        }
+
+        .toggle-arrow.open {
+            transform: rotate(180deg);
+        }
+
+        .settings-content {
+            display: none;
+            padding: 12px 8px;
+        }
+
+        .settings-content.open {
+            display: block;
+        }
+
+        /* Voice Response Toggle */
+        .voice-response-control {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            background: #F8F9FA;
             border-radius: 8px;
-            margin-bottom: 16px;
+            margin-bottom: 12px;
         }
 
-        .info-message .empty-state {
-            color: #0c5460;
-            padding: 20px;
-            font-style: normal;
+        .voice-response-label {
+            font-size: 15px;
+            color: #333;
+            font-weight: 500;
         }
 
-        /* Toggle switch styles */
-        .switch {
+        .toggle-switch {
             position: relative;
-            display: inline-block;
-            width: 50px;
-            height: 26px;
+            width: 51px;
+            height: 31px;
         }
 
-        .switch input {
+        .toggle-switch input {
             opacity: 0;
             width: 0;
             height: 0;
         }
 
-        .slider {
+        .toggle-slider {
             position: absolute;
             cursor: pointer;
             top: 0;
@@ -384,158 +511,346 @@
             right: 0;
             bottom: 0;
             background-color: #ccc;
-            transition: .3s;
-            border-radius: 26px;
+            transition: .4s;
+            border-radius: 31px;
         }
 
-        .slider:before {
+        .toggle-slider:before {
             position: absolute;
             content: "";
-            height: 18px;
-            width: 18px;
+            height: 23px;
+            width: 23px;
             left: 4px;
             bottom: 4px;
             background-color: white;
-            transition: .3s;
+            transition: .4s;
             border-radius: 50%;
         }
 
-        input:checked+.slider {
+        .toggle-switch input:checked + .toggle-slider {
             background-color: #007AFF;
         }
 
-        input:checked+.slider:before {
-            transform: translateX(24px);
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
+
+        /* TTS Controls */
+        .tts-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .tts-control {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .tts-control label {
+            font-size: 13px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .tts-control select,
+        .tts-control input[type="range"],
+        .tts-control input[type="number"] {
+            padding: 6px 8px;
+            border: 1px solid #DDD;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .tts-control input[type="number"] {
+            width: 80px;
+            margin-top: 4px;
+        }
+
+        .system-voice-info,
+        .rate-warning {
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .system-voice-info {
+            background: #E3F2FD;
+            border: 1px solid #2196F3;
+            color: #1565C0;
+        }
+
+        .rate-warning {
+            background: #FFF3E0;
+            border: 1px solid #FF9800;
+            color: #E65100;
+        }
+
+        .info-text a,
+        .warning-text {
+            color: inherit;
+        }
+
+        .tts-test-btn {
+            padding: 10px 16px;
+            background: #007AFF;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .tts-test-btn:hover {
+            background: #0051D5;
+        }
+
+        /* Mobile Responsive Styles */
+        @media (max-width: 768px) {
+            .app-container {
+                max-width: 100%;
+            }
+
+            .app-header {
+                padding: 12px 16px;
+            }
+
+            .app-header h1 {
+                font-size: 18px;
+            }
+
+            .app-header .subtitle {
+                font-size: 12px;
+            }
+
+            .conversation-header {
+                padding: 10px 16px;
+            }
+
+            .conversation-title {
+                font-size: 14px;
+            }
+
+            .conversation-messages {
+                padding: 12px;
+                gap: 8px;
+            }
+
+            .message-bubble {
+                max-width: 85%;
+                font-size: 14px;
+                padding: 8px 12px;
+            }
+
+            .message-text {
+                font-size: 14px;
+            }
+
+            .message-meta {
+                font-size: 10px;
+            }
+
+            .input-section {
+                padding: 12px 16px;
+            }
+
+            .send-mode-controls {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+
+            .trigger-word-input {
+                width: 100%;
+            }
+
+            .trigger-word-input input {
+                flex: 1;
+            }
+
+            .input-container {
+                padding: 6px 6px 6px 12px;
+            }
+
+            .message-input {
+                font-size: 16px; /* Prevents zoom on iOS */
+            }
+
+            .mic-button {
+                width: 36px;
+                height: 36px;
+            }
+
+            .mic-icon {
+                width: 18px;
+                height: 18px;
+            }
+
+            .icon-button {
+                padding: 6px;
+            }
+
+            .icon-button svg {
+                width: 18px;
+                height: 18px;
+            }
+        }
+
+        /* Very small mobile screens */
+        @media (max-width: 480px) {
+            body {
+                padding: 0;
+            }
+
+            .app-header {
+                padding: 10px 12px;
+            }
+
+            .conversation-messages {
+                padding: 8px;
+            }
+
+            .message-bubble {
+                max-width: 90%;
+                padding: 6px 10px;
+            }
+
+            .input-section {
+                padding: 10px 12px;
+            }
+
+            .send-mode-controls {
+                font-size: 13px;
+            }
         }
     </style>
 </head>
-
 <body>
-    <div class="container">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <h1 style="margin: 0;">Voice Mode for Claude Code</h1>
-            <a href="/messenger" style="color: #999; text-decoration: none; font-size: 13px;">Switch to Messenger UI</a>
+    <div class="app-container">
+        <!-- Header -->
+        <div class="app-header">
+            <h1>Voice Mode for Claude Code</h1>
+            <a href="/legacy" class="legacy-link">Switch to Legacy UI</a>
         </div>
 
-
-
-        <div class="input-section">
-            <div class="voice-controls">
-                <button id="listenBtn">
-                    <svg class="mic-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-                        <path
-                            d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1ZM19 12C19 15.53 16.39 18.44 13 18.93V22H11V18.93C7.61 18.44 5 15.53 5 12H7C7 14.76 9.24 17 12 17C14.76 17 17 14.76 17 12H19Z" />
-                    </svg>
-                    <span id="listenBtnText">Start Listening</span>
-                </button>
-                <div class="listening-indicator" id="listeningIndicator">
-                    <div class="listening-dot"></div>
-                    <span>Listening...</span>
-                </div>
-            </div>
-
-            <div class="send-mode-controls">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                    <label style="font-size: 14px; color: #666;">Send Mode:</label>
-                    <div style="display: flex; gap: 12px; align-items: center;">
-                        <label style="font-size: 14px; color: #666;">
-                            <input type="radio" name="sendMode" value="automatic" id="sendModeAutomatic" checked>
-                            Send Automatically
-                        </label>
-                        <label style="font-size: 14px; color: #666;">
-                            <input type="radio" name="sendMode" value="wait" id="sendModeWait">
-                            Wait for Trigger Word
-                        </label>
-                    </div>
-                </div>
-
-                <div id="triggerWordControls" style="display: none; margin-bottom: 16px;">
-                    <div style="display: flex; gap: 12px; align-items: center;">
-                        <label style="font-size: 14px; color: #666;">Trigger Word:</label>
-                        <input type="text" id="triggerWordInput" placeholder="e.g., send, claude, go"
-                               style="flex: 1; padding: 8px; border: 2px solid #ddd; border-radius: 6px; font-size: 14px;">
-                        <button id="sendNowBtn" style="background: #007AFF; color: white; border: none; padding: 8px 16px;
-                                border-radius: 6px; font-size: 14px; cursor: pointer;">
-                            Send Now
-                        </button>
-                    </div>
-                </div>
-
-                <div id="queuedUtterancesSection" style="display: none; margin-bottom: 16px;">
-                    <div style="font-size: 14px; color: #666; font-weight: 500; margin-bottom: 8px;">
-                        Queued Messages (<span id="queuedCount">0</span>):
-                    </div>
-                    <div id="queuedUtterancesList" style="max-height: 150px; overflow-y: auto; border: 1px solid #ddd;
-                                                           border-radius: 6px; padding: 8px; background: #f8f9fa;">
-                        <div style="color: #999; font-style: italic; font-size: 13px;">No messages queued</div>
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Conversation Section -->
+            <div class="conversation-section">
+                <!-- Conversation Messages -->
+                <div id="conversationContainer" class="conversation-container">
+                    <div id="conversationMessages" class="conversation-messages">
+                        <div class="empty-state">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="#999">
+                                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+                            </svg>
+                            <p id="emptyStateMessage">No messages yet. Type or speak to start the conversation!</p>
+                        </div>
+                        <div id="waitingIndicator" class="waiting-indicator" style="display: none;">
+                            Claude is waiting...
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <div class="interim-text" id="interimText">Start speaking and your words will appear here...</div>
-        </div>
-        <div class="tts-settings">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h4>Allow Claude to speak back to you</h4>
-                <label class="switch">
-                    <input type="checkbox" id="voiceResponsesToggle">
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <div class="tts-controls" id="voiceOptions" style="display: none;">
-                <div class="tts-control">
-                    <label for="languageSelect">Language:</label>
-                    <select id="languageSelect">
-                        <option value="en-US">Loading languages...</option>
-                    </select>
+            <!-- Input Section -->
+            <div class="input-section">
+                <!-- Send Mode Controls -->
+                <div class="send-mode-controls">
+                    <div class="send-mode-radio">
+                        <input type="radio" id="autoMode" name="sendMode" value="automatic" checked>
+                        <label for="autoMode">Auto-send on pause</label>
+                    </div>
+                    <div class="send-mode-radio">
+                        <input type="radio" id="triggerMode" name="sendMode" value="trigger">
+                        <label for="triggerMode">Wait for trigger word</label>
+                    </div>
+                    <div class="trigger-word-input" id="triggerWordInputContainer" style="display: none;">
+                        <label for="triggerWordInput">Trigger:</label>
+                        <input
+                            type="text"
+                            id="triggerWordInput"
+                            placeholder="e.g., send, go"
+                            value="send"
+                        >
+                    </div>
                 </div>
-                <div class="tts-control">
-                    <label for="voiceSelect">Voice:</label>
-                    <select id="voiceSelect">
-                        <option value="system">Mac System Voice</option>
-                        <optgroup label="Browser Voices (Cloud)" id="cloudVoicesGroup">
-                        </optgroup>
-                        <optgroup label="Browser Voices (Local)" id="localVoicesGroup">
-                        </optgroup>
-                    </select>
-                </div>
-                <div id="systemVoiceInfo" class="system-voice-info" style="display: none;">
-                    <span class="info-icon">ℹ️</span>
-                    <span class="info-text">You can download high quality voices in your Mac settings app. See the <a
-                            href="https://github.com/johnmatthewtennant/mcp-voice-hooks?tab=readme-ov-file#voice-responses"
-                            target="_blank">README</a></span>
-                </div>
-                <div id="rateWarning" class="rate-warning" style="display: none;">
-                    <span class="warning-icon">⚠️</span>
-                    <span class="warning-text">Google voices may not respond well to rate adjustments</span>
-                </div>
-                <div class="tts-control">
-                    <label for="speechRate">Speaking Rate:</label>
-                    <input type="range" id="speechRate" min="0.5" max="5" step="0.1" value="1">
-                    <input type="number" id="speechRateInput" min="0.5" max="5" step="0.1" value="1">
-                </div>
-                <button class="tts-test-btn" id="testTTSBtn">Test Voice</button>
-            </div>
-        </div>
 
-        <div class="utterances-section">
-            <h3>
-                Recent Utterances
-                <button class="refresh-btn" id="refreshBtn">Refresh</button>
-                <button class="refresh-btn" id="clearAllBtn" style="background: #DC3545; margin-left: 8px;">Clear
-                    All</button>
-            </h3>
-            <div class="info-message" id="infoMessage" style="display: none;">
-                <div class="empty-state">You need to send one message in the Claude code CLI to start voice interaction
+                <!-- Text Input with Microphone -->
+                <div class="input-container">
+                    <textarea
+                        id="messageInput"
+                        class="message-input"
+                        placeholder="Type a message or use voice..."
+                        rows="1"
+                    ></textarea>
+                    <button id="micBtn" class="mic-button" title="Voice dictation">
+                        <svg class="mic-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                            <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1ZM19 12C19 15.53 16.39 18.44 13 18.93V22H11V18.93C7.61 18.44 5 15.53 5 12H7C7 14.76 9.24 17 12 17C14.76 17 17 14.76 17 12H19Z" />
+                        </svg>
+                    </button>
                 </div>
-            </div>
-            <div class="utterances-list" id="utterancesList">
-                <div class="empty-state">Nothing yet.</div>
+
+                <!-- Settings Toggle -->
+                <div class="settings-toggle">
+                    <div class="toggle-header" id="settingsToggleHeader">
+                        <h3>Voice Settings</h3>
+                        <span class="toggle-arrow">▼</span>
+                    </div>
+                    <div class="settings-content" id="settingsContent">
+                        <div class="voice-response-control">
+                            <span class="voice-response-label">Voice Responses</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="voiceResponsesToggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <div class="tts-controls" id="voiceOptions" style="display: none; margin-top: 12px;">
+                            <div class="tts-control">
+                                <label for="languageSelect">Language:</label>
+                                <select id="languageSelect">
+                                    <option value="en-US">Loading languages...</option>
+                                </select>
+                            </div>
+                            <div class="tts-control">
+                                <label for="voiceSelect">Voice:</label>
+                                <select id="voiceSelect">
+                                    <option value="system">Mac System Voice</option>
+                                    <optgroup label="Browser Voices (Cloud)" id="cloudVoicesGroup">
+                                    </optgroup>
+                                    <optgroup label="Browser Voices (Local)" id="localVoicesGroup">
+                                    </optgroup>
+                                </select>
+                            </div>
+                            <div id="systemVoiceInfo" class="system-voice-info" style="display: none;">
+                                <span class="info-icon">ℹ️</span>
+                                <span class="info-text">Download high quality voices in Mac System Settings. <a
+                                        href="https://github.com/johnmatthewtennant/mcp-voice-hooks?tab=readme-ov-file#voice-responses"
+                                        target="_blank">Learn more</a></span>
+                            </div>
+                            <div id="rateWarning" class="rate-warning" style="display: none;">
+                                <span class="warning-icon">⚠️</span>
+                                <span class="warning-text">Google voices may not respond well to rate adjustments</span>
+                            </div>
+                            <div class="tts-control">
+                                <label for="speechRate">Speaking Rate:</label>
+                                <input type="range" id="speechRate" min="0.5" max="5" step="0.1" value="1">
+                                <input type="number" id="speechRateInput" min="0.5" max="5" step="0.1" value="1">
+                            </div>
+                            <button class="tts-test-btn" id="testTTSBtn">Test Voice</button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
     <script src="app.js"></script>
 </body>
-
 </html>

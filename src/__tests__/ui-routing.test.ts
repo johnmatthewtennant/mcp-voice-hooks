@@ -13,37 +13,36 @@ describe('UI Routing', () => {
   });
 
   describe('GET /', () => {
-    it('should serve messenger.html by default', async () => {
+    it('should serve messenger UI (index.html) by default', async () => {
       const response = await fetch(`${server.url}/`);
       const html = await response.text();
 
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('text/html');
-      expect(html).toContain('messenger.js');
-      expect(html).toContain('Messenger'); // Title or content specific to messenger UI
+      expect(html).toContain('app.js');
+      expect(html).toContain('Voice Mode'); // Title
     });
   });
 
   describe('GET /legacy', () => {
-    it('should always serve index.html', async () => {
+    it('should always serve legacy.html', async () => {
       const response = await fetch(`${server.url}/legacy`);
       const html = await response.text();
 
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('text/html');
-      expect(html).toContain('app.js');
-      expect(html).not.toContain('messenger.js');
+      expect(html).toContain('legacy.js');
     });
   });
 
   describe('GET /messenger', () => {
-    it('should always serve messenger.html', async () => {
+    it('should serve messenger UI (index.html)', async () => {
       const response = await fetch(`${server.url}/messenger`);
       const html = await response.text();
 
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('text/html');
-      expect(html).toContain('messenger.js');
+      expect(html).toContain('app.js');
     });
   });
 });

@@ -442,19 +442,20 @@ export class TestServer {
 
     // HTML routes for UI
     this.app.get('/', (_req, res) => {
-      // Default to messenger UI
-      const publicDir = path.join(process.cwd(), 'public');
-      res.sendFile(path.join(publicDir, 'messenger.html'));
-    });
-
-    this.app.get('/legacy', (_req, res) => {
+      // Messenger is now index.html
       const publicDir = path.join(process.cwd(), 'public');
       res.sendFile(path.join(publicDir, 'index.html'));
     });
 
-    this.app.get('/messenger', (_req, res) => {
+    this.app.get('/legacy', (_req, res) => {
       const publicDir = path.join(process.cwd(), 'public');
-      res.sendFile(path.join(publicDir, 'messenger.html'));
+      res.sendFile(path.join(publicDir, 'legacy.html'));
+    });
+
+    this.app.get('/messenger', (_req, res) => {
+      // Messenger is now index.html
+      const publicDir = path.join(process.cwd(), 'public');
+      res.sendFile(path.join(publicDir, 'index.html'));
     });
 
     // Hook endpoints for testing

@@ -757,19 +757,20 @@ app.post('/api/speak-system', async (req: Request, res: Response) => {
 
 // UI Routing
 app.get('/', (_req: Request, res: Response) => {
-  // Default to messenger UI (can be overridden with --legacy-ui flag)
+  // Default to messenger UI (now index.html, can be overridden with --legacy-ui flag)
   const useLegacyUI = process.env.MCP_VOICE_HOOKS_LEGACY_UI === 'true';
-  const htmlFile = useLegacyUI ? 'index.html' : 'messenger.html';
+  const htmlFile = useLegacyUI ? 'legacy.html' : 'index.html';
   debugLog(`[HTTP] Serving ${htmlFile} for root route`);
   res.sendFile(path.join(__dirname, '..', 'public', htmlFile));
 });
 
 app.get('/legacy', (_req: Request, res: Response) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, '..', 'public', 'legacy.html'));
 });
 
 app.get('/messenger', (_req: Request, res: Response) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'messenger.html'));
+  // Messenger is now the default index.html
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
 // Start HTTP server
@@ -791,8 +792,8 @@ app.listen(HTTP_PORT, async () => {
         debugLog('[Browser] No frontend connected, opening browser...');
         try {
           const open = (await import('open')).default;
-          // Open messenger UI by default
-          await open(`http://localhost:${HTTP_PORT}/messenger`);
+          // Open default UI (messenger is now at root)
+          await open(`http://localhost:${HTTP_PORT}`);
         } catch (error) {
           debugLog('[Browser] Failed to open browser:', error);
         }
