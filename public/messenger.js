@@ -657,18 +657,19 @@ class MessengerClient {
                         const finalText = this.messageInput.value.trim();
                         this.sendMessage(finalText);
                         this.messageInput.value = '';
+                        this.accumulatedText = '';
                     } else {
                         // Trigger word mode: accumulate until trigger word
-                        // First, get what's currently in the input (might be empty or have previous utterances)
-                        const currentAccumulated = this.messageInput.value;
-
-                        // The final transcript is what was just spoken
+                        // Use the previously saved accumulated text (before interim was shown)
+                        const previouslyAccumulated = this.accumulatedText || '';
                         const newUtterance = transcript.trim();
 
                         // Check if this new utterance contains the trigger word
                         if (this.containsTriggerWord(newUtterance)) {
                             // Send everything accumulated plus this utterance (minus trigger word)
-                            const combined = currentAccumulated ? currentAccumulated + '\n' + newUtterance : newUtterance;
+                            const combined = previouslyAccumulated
+                                ? previouslyAccumulated + '\n' + newUtterance
+                                : newUtterance;
                             const textToSend = this.removeTriggerWord(combined).trim();
                             if (textToSend) {
                                 this.sendMessage(textToSend);
@@ -677,9 +678,11 @@ class MessengerClient {
                             this.accumulatedText = '';
                         } else {
                             // No trigger word - append this utterance to accumulated text
-                            this.messageInput.value = currentAccumulated
-                                ? currentAccumulated + '\n' + newUtterance
+                            const newAccumulated = previouslyAccumulated
+                                ? previouslyAccumulated + '\n' + newUtterance
                                 : newUtterance;
+                            this.messageInput.value = newAccumulated;
+                            this.accumulatedText = newAccumulated;
                             this.autoGrowTextarea();
                         }
                     }
