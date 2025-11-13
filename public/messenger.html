@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Mode for Claude Code - Messenger</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .app-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+        }
+
+        /* Header */
+        .app-header {
+            padding: 16px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .app-header h1 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .app-header .subtitle {
+            margin: 4px 0 0 0;
+            font-size: 13px;
+            opacity: 0.9;
+        }
+
+        /* Main Content Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Conversation Section */
+        .conversation-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .conversation-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 20px;
+            border-bottom: 1px solid #E0E0E0;
+            background: #FAFAFA;
+        }
+
+        .conversation-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .conversation-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .icon-button {
+            background: white;
+            border: 1px solid #DDD;
+            border-radius: 6px;
+            padding: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .icon-button:hover {
+            background: #F0F0F0;
+            border-color: #BBB;
+        }
+
+        .icon-button.danger:hover {
+            background: #FFEBEE;
+            border-color: #EF5350;
+        }
+
+        .icon-button svg {
+            fill: #666;
+        }
+
+        .icon-button.danger:hover svg {
+            fill: #EF5350;
+        }
+
+        /* Conversation Container */
+        .conversation-container {
+            flex: 1;
+            overflow-y: auto;
+            background: #F5F5F5;
+            position: relative;
+        }
+
+        .conversation-messages {
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            gap: 12px;
+            min-height: 100%;
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #999;
+            text-align: center;
+            padding: 40px 20px;
+        }
+
+        .empty-state svg {
+            margin-bottom: 16px;
+        }
+
+        .empty-state p {
+            margin: 0;
+            font-size: 16px;
+        }
+
+        /* Message Bubbles */
+        .message-bubble {
+            max-width: 70%;
+            padding: 10px 14px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            position: relative;
+            animation: messageSlideIn 0.2s ease-out;
+        }
+
+        @keyframes messageSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* User Messages (Right Side, Blue) */
+        .message-bubble.user {
+            align-self: flex-end;
+            background: #007AFF;
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        /* Assistant Messages (Left Side, Gray) */
+        .message-bubble.assistant {
+            align-self: flex-start;
+            background: #E5E5EA;
+            color: #000;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message-text {
+            font-size: 15px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+
+        .message-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+            font-size: 11px;
+            opacity: 0.7;
+        }
+
+        .message-bubble.user .message-meta {
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .message-bubble.assistant .message-meta {
+            color: rgba(0, 0, 0, 0.5);
+        }
+
+        .message-timestamp {
+            white-space: nowrap;
+        }
+
+        .message-status {
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+
+        /* Status Colors for User Messages */
+        .message-bubble.user .message-status.pending {
+            color: #FFE082;
+        }
+
+        .message-bubble.user .message-status.delivered {
+            color: #B3E5FC;
+        }
+
+        .message-bubble.user .message-status.responded {
+            color: #C8E6C9;
+        }
+
+        /* Scrollbar Styling */
+        .conversation-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .conversation-container::-webkit-scrollbar-track {
+            background: #F5F5F5;
+        }
+
+        .conversation-container::-webkit-scrollbar-thumb {
+            background: #CCC;
+            border-radius: 4px;
+        }
+
+        .conversation-container::-webkit-scrollbar-thumb:hover {
+            background: #AAA;
+        }
+
+        /* Input Section */
+        .input-section {
+            border-top: 1px solid #E0E0E0;
+            background: white;
+            padding: 16px 20px;
+        }
+
+        /* Send Mode Controls */
+        .send-mode-controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 12px;
+            padding: 8px;
+            background: #F8F9FA;
+            border-radius: 8px;
+        }
+
+        .send-mode-radio {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .send-mode-radio input[type="radio"] {
+            cursor: pointer;
+        }
+
+        .send-mode-radio label {
+            font-size: 14px;
+            color: #666;
+            cursor: pointer;
+        }
+
+        .trigger-word-input {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .trigger-word-input label {
+            font-size: 13px;
+            color: #666;
+        }
+
+        .trigger-word-input input {
+            padding: 4px 8px;
+            border: 1px solid #DDD;
+            border-radius: 4px;
+            font-size: 13px;
+            width: 120px;
+        }
+
+        /* Text Input Container */
+        .input-container {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            background: #F8F9FA;
+            border: 2px solid #E0E0E0;
+            border-radius: 24px;
+            padding: 8px 8px 8px 16px;
+            transition: border-color 0.2s;
+        }
+
+        .input-container:focus-within {
+            border-color: #007AFF;
+        }
+
+        /* Text Input */
+        .message-input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            resize: none;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 15px;
+            line-height: 1.4;
+            padding: 6px 0;
+            max-height: 120px;
+            overflow-y: auto;
+            outline: none;
+        }
+
+        .message-input::placeholder {
+            color: #999;
+        }
+
+        /* Microphone Button */
+        .mic-button {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: none;
+            background: #007AFF;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+
+        .mic-button:hover {
+            background: #0051D5;
+            transform: scale(1.05);
+        }
+
+        .mic-button:active {
+            transform: scale(0.95);
+        }
+
+        .mic-button.listening {
+            background: #EF5350;
+            animation: micPulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes micPulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(239, 83, 80, 0.7);
+            }
+            50% {
+                box-shadow: 0 0 0 8px rgba(239, 83, 80, 0);
+            }
+        }
+
+        .mic-icon {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        /* Listening Indicator */
+        .listening-indicator {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: #FFEBEE;
+            border: 1px solid #EF5350;
+            border-radius: 6px;
+            color: #C62828;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 12px;
+        }
+
+        .listening-indicator.active {
+            display: flex;
+        }
+
+        .listening-dot {
+            width: 12px;
+            height: 12px;
+            background: #EF5350;
+            border-radius: 50%;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.5;
+                transform: scale(1.2);
+            }
+        }
+
+        /* Settings Toggle */
+        .settings-toggle {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #E0E0E0;
+        }
+
+        .toggle-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+
+        .toggle-header:hover {
+            background: #F8F9FA;
+        }
+
+        .toggle-header h3 {
+            margin: 0;
+            font-size: 15px;
+            color: #666;
+        }
+
+        .toggle-arrow {
+            transition: transform 0.2s;
+        }
+
+        .toggle-arrow.open {
+            transform: rotate(180deg);
+        }
+
+        .settings-content {
+            display: none;
+            padding: 12px 8px;
+        }
+
+        .settings-content.open {
+            display: block;
+        }
+
+        /* Voice Response Toggle */
+        .voice-response-control {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px;
+            background: #F8F9FA;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+
+        .voice-response-label {
+            font-size: 15px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .toggle-switch {
+            position: relative;
+            width: 51px;
+            height: 31px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 31px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 23px;
+            width: 23px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #007AFF;
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
+
+        /* Mobile Responsive Styles */
+        @media (max-width: 768px) {
+            .app-container {
+                max-width: 100%;
+            }
+
+            .app-header {
+                padding: 12px 16px;
+            }
+
+            .app-header h1 {
+                font-size: 18px;
+            }
+
+            .app-header .subtitle {
+                font-size: 12px;
+            }
+
+            .conversation-header {
+                padding: 10px 16px;
+            }
+
+            .conversation-title {
+                font-size: 14px;
+            }
+
+            .conversation-messages {
+                padding: 12px;
+                gap: 8px;
+            }
+
+            .message-bubble {
+                max-width: 85%;
+                font-size: 14px;
+                padding: 8px 12px;
+            }
+
+            .message-text {
+                font-size: 14px;
+            }
+
+            .message-meta {
+                font-size: 10px;
+            }
+
+            .input-section {
+                padding: 12px 16px;
+            }
+
+            .send-mode-controls {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+
+            .trigger-word-input {
+                width: 100%;
+            }
+
+            .trigger-word-input input {
+                flex: 1;
+            }
+
+            .input-container {
+                padding: 6px 6px 6px 12px;
+            }
+
+            .message-input {
+                font-size: 16px; /* Prevents zoom on iOS */
+            }
+
+            .mic-button {
+                width: 36px;
+                height: 36px;
+            }
+
+            .mic-icon {
+                width: 18px;
+                height: 18px;
+            }
+
+            .icon-button {
+                padding: 6px;
+            }
+
+            .icon-button svg {
+                width: 18px;
+                height: 18px;
+            }
+        }
+
+        /* Very small mobile screens */
+        @media (max-width: 480px) {
+            body {
+                padding: 0;
+            }
+
+            .app-header {
+                padding: 10px 12px;
+            }
+
+            .conversation-messages {
+                padding: 8px;
+            }
+
+            .message-bubble {
+                max-width: 90%;
+                padding: 6px 10px;
+            }
+
+            .input-section {
+                padding: 10px 12px;
+            }
+
+            .send-mode-controls {
+                font-size: 13px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <div class="app-header">
+            <h1>Voice Mode for Claude Code</h1>
+            <div class="subtitle">Real-time voice conversation interface</div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Conversation Section -->
+            <div class="conversation-section">
+                <div class="conversation-header">
+                    <div class="conversation-title">Conversation</div>
+                    <div class="conversation-actions">
+                        <button id="refreshBtn" class="icon-button" title="Refresh">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">
+                                <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                            </svg>
+                        </button>
+                        <button id="clearAllBtn" class="icon-button danger" title="Clear All">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">
+                                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Conversation Messages -->
+                <div id="conversationContainer" class="conversation-container">
+                    <div id="conversationMessages" class="conversation-messages">
+                        <div class="empty-state">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="#999">
+                                <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
+                            </svg>
+                            <p id="emptyStateMessage">No messages yet. Type or speak to start the conversation!</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Section -->
+            <div class="input-section">
+                <!-- Send Mode Controls -->
+                <div class="send-mode-controls">
+                    <div class="send-mode-radio">
+                        <input type="radio" id="autoMode" name="sendMode" value="automatic" checked>
+                        <label for="autoMode">Auto-send on pause</label>
+                    </div>
+                    <div class="send-mode-radio">
+                        <input type="radio" id="triggerMode" name="sendMode" value="trigger">
+                        <label for="triggerMode">Wait for trigger word</label>
+                    </div>
+                    <div class="trigger-word-input" id="triggerWordInputContainer" style="display: none;">
+                        <label for="triggerWordInput">Trigger:</label>
+                        <input
+                            type="text"
+                            id="triggerWordInput"
+                            placeholder="e.g., send, go"
+                            value="send"
+                        >
+                    </div>
+                </div>
+
+                <!-- Listening Indicator -->
+                <div id="listeningIndicator" class="listening-indicator">
+                    <span class="listening-dot"></span>
+                    <span>Listening...</span>
+                </div>
+
+                <!-- Text Input with Microphone -->
+                <div class="input-container">
+                    <textarea
+                        id="messageInput"
+                        class="message-input"
+                        placeholder="Type a message or use voice..."
+                        rows="1"
+                    ></textarea>
+                    <button id="micBtn" class="mic-button" title="Voice dictation">
+                        <svg class="mic-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                            <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1ZM19 12C19 15.53 16.39 18.44 13 18.93V22H11V18.93C7.61 18.44 5 15.53 5 12H7C7 14.76 9.24 17 12 17C14.76 17 17 14.76 17 12H19Z" />
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Settings Toggle -->
+                <div class="settings-toggle">
+                    <div class="toggle-header" id="settingsToggleHeader">
+                        <h3>Voice Settings</h3>
+                        <span class="toggle-arrow">▼</span>
+                    </div>
+                    <div class="settings-content" id="settingsContent">
+                        <div class="voice-response-control">
+                            <span class="voice-response-label">Voice Responses</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="voiceResponsesToggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="messenger.js"></script>
+</body>
+</html>
