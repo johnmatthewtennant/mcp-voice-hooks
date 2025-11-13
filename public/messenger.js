@@ -668,7 +668,7 @@ class MessengerClient {
                         if (this.containsTriggerWord(newUtterance)) {
                             // Send everything accumulated plus this utterance (minus trigger word)
                             const combined = previouslyAccumulated
-                                ? previouslyAccumulated + '\n' + newUtterance
+                                ? previouslyAccumulated + ' ' + newUtterance
                                 : newUtterance;
                             const textToSend = this.removeTriggerWord(combined).trim();
                             if (textToSend) {
@@ -677,9 +677,9 @@ class MessengerClient {
                             this.messageInput.value = '';
                             this.accumulatedText = '';
                         } else {
-                            // No trigger word - append this utterance to accumulated text
+                            // No trigger word - append with space (no newlines)
                             const newAccumulated = previouslyAccumulated
-                                ? previouslyAccumulated + '\n' + newUtterance
+                                ? previouslyAccumulated + ' ' + newUtterance
                                 : newUtterance;
                             this.messageInput.value = newAccumulated;
                             this.accumulatedText = newAccumulated;
@@ -694,14 +694,9 @@ class MessengerClient {
 
             if (interimTranscript) {
                 // In trigger mode, preserve accumulated text and append interim
-                if (this.sendMode === 'trigger' && !this.isInterimText) {
-                    // Save current accumulated text
-                    this.accumulatedText = this.messageInput.value;
-                }
-
                 if (this.sendMode === 'trigger' && this.accumulatedText) {
-                    // Show accumulated + interim
-                    this.messageInput.value = this.accumulatedText + '\n' + interimTranscript;
+                    // Show accumulated + interim with space
+                    this.messageInput.value = this.accumulatedText + ' ' + interimTranscript;
                 } else {
                     // Show just interim
                     this.messageInput.value = interimTranscript;
