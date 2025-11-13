@@ -35,6 +35,16 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 
 ### Next tasks
 
+- [ ] Continue test improvements (3 test files remaining):
+  - [ ] Refactor voice-input-state.test.ts to use real server
+  - [ ] Refactor validate-action.test.ts to use real server
+  - [ ] Refactor conversation-flow.test.ts to use real server
+- [x] Phase 1-3 of test improvements completed:
+  - [x] Removed low-value mocked tests (mcp-speak-response.test.ts)
+  - [x] Created TestServer helper for real HTTP integration tests
+  - [x] Added 13 new HTTP integration tests
+  - [x] Refactored speak-endpoint.test.ts and utterance-states.test.ts to use real server
+  - All 86 tests passing with TDD green-red-green cycles
 - [x] make sure voice input and voice responses are disabled when the browser is closed
 - [x] ~~make the disable pre-tool hook configuration more nuanced. It should only control if we deqeueue before tools. We always want to enforce speaking if there are unresponded utterances.~~ (Pre-tool hook removed)
 - [ ] add a note to the pre-speak hook that the voice response was not delivered because the assistant needs to read the new utterances first

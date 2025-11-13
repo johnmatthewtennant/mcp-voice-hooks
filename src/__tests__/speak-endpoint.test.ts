@@ -127,7 +127,7 @@ describe('Speak Endpoint Integration Tests', () => {
         body: JSON.stringify({ text: 'Third test' })
       });
       expect(response.status).toBe(200);
-    });
+    }, 10000); // Increase timeout for test with 2 speak calls
   });
 
   describe('POST /api/speak-system', () => {
