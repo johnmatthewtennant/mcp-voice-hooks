@@ -150,6 +150,49 @@ export class TestServer {
       });
     });
 
+    // POST /api/wait-for-utterances (simplified for testing - doesn't actually wait)
+    this.app.post('/api/wait-for-utterances', (_req, res) => {
+      if (!this.voicePreferences.voiceInputActive) {
+        res.status(400).json({
+          success: false,
+          error: 'Voice input is not active. Cannot wait for utterances when voice input is disabled.'
+        });
+        return;
+      }
+
+      // For testing, just check immediately without polling
+      const pendingUtterances = this.queue.utterances
+        .filter(u => u.status === 'pending')
+        .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      if (pendingUtterances.length > 0) {
+        pendingUtterances.forEach(u => {
+          this.queue.markDelivered(u.id);
+        });
+
+        res.json({
+          success: true,
+          utterances: pendingUtterances.map(u => ({
+            id: u.id,
+            text: u.text,
+            timestamp: u.timestamp,
+            status: 'delivered'
+          })),
+          count: pendingUtterances.length,
+          waitTime: 0
+        });
+      } else {
+        // No utterances - return empty
+        res.json({
+          success: true,
+          utterances: [],
+          count: 0,
+          message: 'Timeout waiting for utterances',
+          waitTime: 0
+        });
+      }
+    });
+
     // POST /api/dequeue-utterances
     this.app.post('/api/dequeue-utterances', (_req, res) => {
       if (!this.voicePreferences.voiceInputActive) {
