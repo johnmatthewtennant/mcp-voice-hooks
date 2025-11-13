@@ -757,7 +757,8 @@ app.listen(HTTP_PORT, async () => {
         debugLog('[Browser] No frontend connected, opening browser...');
         try {
           const open = (await import('open')).default;
-          await open(`http://localhost:${HTTP_PORT}`);
+          // Open messenger UI by default
+          await open(`http://localhost:${HTTP_PORT}/messenger`);
         } catch (error) {
           debugLog('[Browser] Failed to open browser:', error);
         }
