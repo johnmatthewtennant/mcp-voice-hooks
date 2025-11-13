@@ -19,9 +19,19 @@ interface Utterance {
   status: 'pending' | 'delivered' | 'responded';
 }
 
+// Conversation message type
+interface ConversationMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  timestamp: Date;
+  status?: 'pending' | 'delivered' | 'responded'; // Only for user messages
+}
+
 // UtteranceQueue class for managing utterances in tests
 class UtteranceQueue {
   utterances: Utterance[] = [];
+  messages: ConversationMessage[] = []; // Full conversation history
 
   add(text: string, timestamp?: Date): Utterance {
     const utterance: Utterance = {
@@ -32,7 +42,34 @@ class UtteranceQueue {
     };
 
     this.utterances.push(utterance);
+
+    // Also add to messages array
+    this.messages.push({
+      id: utterance.id,
+      role: 'user',
+      text: utterance.text,
+      timestamp: utterance.timestamp,
+      status: utterance.status
+    });
+
     return utterance;
+  }
+
+  addAssistantMessage(text: string): ConversationMessage {
+    const message: ConversationMessage = {
+      id: randomUUID(),
+      role: 'assistant',
+      text: text.trim(),
+      timestamp: new Date()
+    };
+    this.messages.push(message);
+    return message;
+  }
+
+  getRecentMessages(limit: number = 50): ConversationMessage[] {
+    return this.messages
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime()) // Oldest first
+      .slice(-limit); // Get last N messages
   }
 
   getRecent(limit: number = 10): Utterance[] {
@@ -45,6 +82,12 @@ class UtteranceQueue {
     const utterance = this.utterances.find(u => u.id === id);
     if (utterance) {
       utterance.status = 'delivered';
+
+      // Sync status in messages array
+      const message = this.messages.find(m => m.id === id && m.role === 'user');
+      if (message) {
+        message.status = 'delivered';
+      }
     }
   }
 
@@ -52,11 +95,18 @@ class UtteranceQueue {
     const utterance = this.utterances.find(u => u.id === id);
     if (utterance) {
       utterance.status = 'responded';
+
+      // Sync status in messages array
+      const message = this.messages.find(m => m.id === id && m.role === 'user');
+      if (message) {
+        message.status = 'responded';
+      }
     }
   }
 
   clear(): void {
     this.utterances = [];
+    this.messages = []; // Clear conversation too
   }
 }
 
@@ -132,6 +182,22 @@ export class TestServer {
           timestamp: u.timestamp,
           status: u.status,
         })),
+      });
+    });
+
+    // GET /api/conversation
+    this.app.get('/api/conversation', (req, res) => {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const messages = this.queue.getRecentMessages(limit);
+
+      res.json({
+        messages: messages.map(m => ({
+          id: m.id,
+          role: m.role,
+          text: m.text,
+          timestamp: m.timestamp,
+          status: m.status // Only present for user messages
+        }))
       });
     });
 
@@ -238,8 +304,11 @@ export class TestServer {
       }
 
       try {
-        // Use macOS say command for TTS
+        // Use macOS say command for TTS (mocked in tests)
         await execAsync(`say "${text.replace(/"/g, '\\"')}"`);
+
+        // Store assistant's response in conversation history
+        this.queue.addAssistantMessage(text);
 
         // Mark all delivered utterances as responded
         const deliveredUtterances = this.queue.utterances.filter(u => u.status === 'delivered');
