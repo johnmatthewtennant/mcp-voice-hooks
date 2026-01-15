@@ -479,13 +479,15 @@ class MessengerClient {
 
     renderInstances() {
         // Show/hide selector based on instance count
-        if (this.instances.length <= 1) {
+        if (this.instances.length === 0) {
             this.instanceSelector.style.display = 'none';
             return;
         }
 
         this.instanceSelector.style.display = 'block';
-        this.instanceCount.textContent = `(${this.instances.length} instances)`;
+        this.instanceCount.textContent = this.instances.length === 1 
+            ? '(1 instance)' 
+            : `(${this.instances.length} instances)`;
 
         // Clear and rebuild instance list
         this.instanceList.innerHTML = '';
