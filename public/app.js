@@ -15,6 +15,11 @@ class MessengerClient {
         this.triggerWordInputContainer = document.getElementById('triggerWordInputContainer');
         this.triggerWordInput = document.getElementById('triggerWordInput');
 
+        // Instance selector elements
+        this.instanceSelector = document.getElementById('instanceSelector');
+        this.instanceList = document.getElementById('instanceList');
+        this.instanceCount = document.getElementById('instanceCount');
+
         // Settings
         this.settingsToggleHeader = document.getElementById('settingsToggleHeader');
         this.settingsContent = document.getElementById('settingsContent');
@@ -37,6 +42,8 @@ class MessengerClient {
         this.isInterimText = false;
         this.accumulatedText = ''; // For trigger word mode
         this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
+        this.instances = [];
+        this.targetInstanceId = null;
 
         // TTS state
         this.voices = [];
@@ -115,6 +122,16 @@ class MessengerClient {
                     this.speakText(data.text);
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
+                } else if (data.type === 'targetChanged' || data.type === 'instancesChanged') {
+                    // Update instances when target changes or new instance registers
+                    this.targetInstanceId = data.targetInstanceId;
+                    if (data.instances) {
+                        this.instances = data.instances;
+                        this.instances.forEach(inst => {
+                            inst.isTargeted = inst.id === this.targetInstanceId;
+                        });
+                    }
+                    this.renderInstances();
                 }
             } catch (error) {
                 console.error('Failed to parse TTS event:', error);
@@ -432,8 +449,78 @@ class MessengerClient {
                 const data = await conversationResponse.json();
                 this.updateConversation(data.messages);
             }
+
+            // Load instances
+            await this.loadInstances();
         } catch (error) {
             console.error('Failed to load data:', error);
+        }
+    }
+
+    async loadInstances() {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/instances`);
+            if (response.ok) {
+                const data = await response.json();
+                this.instances = data.instances || [];
+                this.targetInstanceId = data.targetInstanceId;
+                this.renderInstances();
+            }
+        } catch (error) {
+            console.error('Failed to load instances:', error);
+        }
+    }
+
+    renderInstances() {
+        // Show/hide selector based on instance count
+        if (this.instances.length <= 1) {
+            this.instanceSelector.style.display = 'none';
+            return;
+        }
+
+        this.instanceSelector.style.display = 'block';
+        this.instanceCount.textContent = `(${this.instances.length} instances)`;
+
+        // Clear and rebuild instance list
+        this.instanceList.innerHTML = '';
+
+        this.instances.forEach(instance => {
+            const btn = document.createElement('button');
+            btn.className = `instance-btn ${instance.isTargeted ? 'targeted' : ''}`;
+            btn.onclick = () => this.targetInstance(instance.id);
+
+            const name = document.createElement('div');
+            name.className = 'instance-name';
+            name.textContent = instance.name || 'Unknown';
+
+            const lastMsg = document.createElement('div');
+            lastMsg.className = 'instance-last-message';
+            lastMsg.textContent = instance.lastAssistantMessage || 'No messages yet';
+
+            btn.appendChild(name);
+            btn.appendChild(lastMsg);
+            this.instanceList.appendChild(btn);
+        });
+    }
+
+    async targetInstance(instanceId) {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/instances/target`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ instanceId })
+            });
+
+            if (response.ok) {
+                this.targetInstanceId = instanceId;
+                // Update UI immediately
+                this.instances.forEach(inst => {
+                    inst.isTargeted = inst.id === instanceId;
+                });
+                this.renderInstances();
+            }
+        } catch (error) {
+            console.error('Failed to target instance:', error);
         }
     }
 

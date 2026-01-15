@@ -61,6 +61,82 @@
             text-decoration: underline;
         }
 
+        /* Instance Selector */
+        .instance-selector {
+            padding: 8px 16px;
+            background: #FAFAFA;
+            border-bottom: 1px solid #E0E0E0;
+        }
+
+        .instance-selector-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .instance-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        .instance-count {
+            font-size: 11px;
+            color: #999;
+        }
+
+        .instance-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .instance-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 8px 12px;
+            background: white;
+            border: 2px solid #E0E0E0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            min-width: 150px;
+            max-width: 300px;
+        }
+
+        .instance-btn:hover {
+            border-color: #007AFF;
+            background: #F8F9FA;
+        }
+
+        .instance-btn.targeted {
+            border-color: #007AFF;
+            background: #E3F2FD;
+        }
+
+        .instance-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 2px;
+        }
+
+        .instance-last-message {
+            font-size: 11px;
+            color: #666;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+
+        .instance-btn.targeted .instance-name {
+            color: #007AFF;
+        }
+
         /* Main Content Area */
         .main-content {
             flex: 1;
@@ -737,6 +813,17 @@
         <div class="app-header">
             <h1>Voice Mode for Claude Code</h1>
             <a href="/legacy" class="legacy-link">Switch to Legacy UI</a>
+        </div>
+
+        <!-- Instance Selector -->
+        <div id="instanceSelector" class="instance-selector" style="display: none;">
+            <div class="instance-selector-header">
+                <span class="instance-label">Send to:</span>
+                <span class="instance-count" id="instanceCount"></span>
+            </div>
+            <div class="instance-list" id="instanceList">
+                <!-- Instance buttons will be inserted here -->
+            </div>
         </div>
 
         <!-- Main Content -->

@@ -21,10 +21,11 @@ async function main() {
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
       console.log(packageJson.version);
     } else if (command === 'install-hooks') {
-      console.log('🔧 Installing MCP Voice Hooks...');
+      const isGlobal = args.includes('--global') || args.includes('-g');
+      console.log(`🔧 Installing MCP Voice Hooks ${isGlobal ? '(global)' : '(project)'}...`);
 
       // Configure Claude Code settings automatically
-      await configureClaudeCodeSettings();
+      await configureClaudeCodeSettings(isGlobal);
 
       console.log('\n✅ Installation complete!');
       console.log('📝 To add the server to Claude Code, run: `claude mcp add voice-hooks npx mcp-voice-hooks@latest`');
@@ -55,18 +56,21 @@ async function main() {
 
 
 // Automatically configure Claude Code settings
-async function configureClaudeCodeSettings() {
-  const claudeDir = path.join(process.cwd(), '.claude');
-  const settingsPath = path.join(claudeDir, 'settings.local.json');
+async function configureClaudeCodeSettings(isGlobal = false) {
+  const homeDir = process.env.HOME || process.env.USERPROFILE;
+  const claudeDir = isGlobal 
+    ? path.join(homeDir, '.claude')
+    : path.join(process.cwd(), '.claude');
+  const settingsPath = path.join(claudeDir, isGlobal ? 'settings.json' : 'settings.local.json');
   // This was used in versions <= v1.0.21.
   const oldSettingsPath = path.join(claudeDir, 'settings.json');
 
-  console.log('⚙️  Configuring project Claude Code settings...');
+  console.log(`⚙️  Configuring ${isGlobal ? 'global' : 'project'} Claude Code settings...`);
 
   // Create .claude directory if it doesn't exist
   if (!fs.existsSync(claudeDir)) {
     fs.mkdirSync(claudeDir, { recursive: true });
-    console.log('✅ Created project .claude directory');
+    console.log(`✅ Created ${isGlobal ? 'global' : 'project'} .claude directory`);
   }
 
   // Clean up old settings.json if it exists (for users upgrading from older versions)
@@ -127,7 +131,7 @@ async function configureClaudeCodeSettings() {
 
   // Write settings back
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-  console.log('✅ Updated project Claude Code settings');
+  console.log(`✅ Updated ${isGlobal ? 'global' : 'project'} Claude Code settings`);
 }
 
 // Silent hook installation check - runs on every startup

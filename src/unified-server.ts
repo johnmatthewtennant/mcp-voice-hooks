@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import net from 'net';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -22,6 +23,44 @@ const __dirname = path.dirname(__filename);
 // Constants
 const WAIT_TIMEOUT_SECONDS = 60;
 const HTTP_PORT = process.env.MCP_VOICE_HOOKS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_PORT) : 5111;
+
+// Track whether we own the HTTP server or are reusing an existing one
+let isHttpServerOwner = false;
+
+// Check if a port is available
+async function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(false);
+      } else {
+        resolve(false); // Treat other errors as unavailable too
+      }
+    });
+    
+    server.once('listening', () => {
+      server.close();
+      resolve(true);
+    });
+    
+    server.listen(port);
+  });
+}
+
+// Verify an existing server is responding
+async function isExistingServerHealthy(port: number): Promise<boolean> {
+  try {
+    const response = await fetch(`http://localhost:${port}/api/utterances/status`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(2000)
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 // Promisified exec for async/await
 const execAsync = promisify(exec);
@@ -38,12 +77,28 @@ async function playNotificationSound() {
   }
 }
 
+// Connected instance tracking
+interface ConnectedInstance {
+  id: string;
+  name: string;
+  cwd: string;
+  connectedAt: Date;
+  lastSeen: Date;
+  lastAssistantMessage?: string; // Last thing Claude said from this instance
+}
+
+const connectedInstances = new Map<string, ConnectedInstance>();
+
+// Currently targeted instance (for voice input routing)
+let targetInstanceId: string | null = null;
+
 // Shared utterance queue
 interface Utterance {
   id: string;
   text: string;
   timestamp: Date;
   status: 'pending' | 'delivered' | 'responded';
+  targetInstanceId?: string; // Which instance should receive this utterance
 }
 
 // Conversation message type for full conversation history
@@ -59,12 +114,13 @@ class UtteranceQueue {
   utterances: Utterance[] = [];
   messages: ConversationMessage[] = []; // Full conversation history
 
-  add(text: string, timestamp?: Date): Utterance {
+  add(text: string, timestamp?: Date, targetInstanceId?: string | null): Utterance {
     const utterance: Utterance = {
       id: randomUUID(),
       text: text.trim(),
       timestamp: timestamp || new Date(),
-      status: 'pending'
+      status: 'pending',
+      targetInstanceId: targetInstanceId || undefined
     };
 
     this.utterances.push(utterance);
@@ -78,7 +134,7 @@ class UtteranceQueue {
       status: utterance.status
     });
 
-    debugLog(`[Queue] queued: "${utterance.text}"	[id: ${utterance.id}]`);
+    debugLog(`[Queue] queued: "${utterance.text}" -> instance: ${targetInstanceId || 'any'}	[id: ${utterance.id}]`);
     return utterance;
   }
 
@@ -172,7 +228,8 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
   }
 
   const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
-  const utterance = queue.add(text, parsedTimestamp);
+  // Tag utterance with currently targeted instance
+  const utterance = queue.add(text, parsedTimestamp, targetInstanceId);
   res.json({
     success: true,
     utterance: {
@@ -180,6 +237,7 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
       text: utterance.text,
       timestamp: utterance.timestamp,
       status: utterance.status,
+      targetInstanceId: utterance.targetInstanceId,
     },
   });
 });
@@ -227,11 +285,13 @@ app.get('/api/utterances/status', (_req: Request, res: Response) => {
 });
 
 // Shared dequeue logic
-function dequeueUtterancesCore() {
+function dequeueUtterancesCore(forInstanceId?: string) {
   // Always dequeue pending utterances regardless of voiceInputActive
   // This allows both typed and spoken messages to be dequeued
+  // If forInstanceId is provided, only dequeue messages targeted to that instance (or untargeted)
   const pendingUtterances = queue.utterances
     .filter(u => u.status === 'pending')
+    .filter(u => !forInstanceId || !u.targetInstanceId || u.targetInstanceId === forInstanceId)
     .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
   // Mark as delivered
@@ -255,7 +315,7 @@ app.post('/api/dequeue-utterances', (_req: Request, res: Response) => {
 });
 
 // Shared wait for utterance logic
-async function waitForUtteranceCore() {
+async function waitForUtteranceCore(forInstanceId?: string) {
   // Check if voice input is active
   if (!voicePreferences.voiceInputActive) {
     return {
@@ -268,7 +328,7 @@ async function waitForUtteranceCore() {
   const maxWaitMs = secondsToWait * 1000;
   const startTime = Date.now();
 
-  debugLog(`[WaitCore] Starting wait_for_utterance (${secondsToWait}s)`);
+  debugLog(`[WaitCore] Starting wait_for_utterance (${secondsToWait}s) for instance: ${forInstanceId || 'any'}`);
 
   // Notify frontend that wait has started
   notifyWaitStatus(true);
@@ -289,8 +349,10 @@ async function waitForUtteranceCore() {
       };
     }
 
+    // Filter by instance if provided
     const pendingUtterances = queue.utterances.filter(
-      u => u.status === 'pending'
+      u => u.status === 'pending' && 
+           (!forInstanceId || !u.targetInstanceId || u.targetInstanceId === forInstanceId)
     );
 
     if (pendingUtterances.length > 0) {
@@ -418,18 +480,65 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
   });
 });
 
+// Auto-register instance from hook call (using session_id as instanceId)
+function autoRegisterInstance(instanceId: string | undefined, cwd: string | undefined): void {
+  if (!instanceId) return;
+  
+  const existing = connectedInstances.get(instanceId);
+  if (existing) {
+    // Update lastSeen
+    existing.lastSeen = new Date();
+    return;
+  }
+  
+  // Register new instance
+  const name = cwd ? cwd.split('/').pop() || 'unknown' : 'unknown';
+  const instance: ConnectedInstance = {
+    id: instanceId,
+    name,
+    cwd: cwd || 'unknown',
+    connectedAt: new Date(),
+    lastSeen: new Date(),
+  };
+  
+  connectedInstances.set(instanceId, instance);
+  
+  // Auto-target first instance if none targeted
+  if (!targetInstanceId) {
+    targetInstanceId = instanceId;
+  }
+  
+  debugLog(`[Instances] Auto-registered from hook: ${name} (${instanceId})`);
+  
+  // Notify browser clients of new instance
+  const message = JSON.stringify({ 
+    type: 'instancesChanged', 
+    instances: Array.from(connectedInstances.values()).map(inst => ({
+      ...inst,
+      isTargeted: targetInstanceId === inst.id
+    })),
+    targetInstanceId
+  });
+  ttsClients.forEach(client => {
+    client.write(`data: ${message}\n\n`);
+  });
+}
+
 // Unified hook handler
-function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool'): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
+function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool', instanceId?: string): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
   const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
   const voiceInputActive = voicePreferences.voiceInputActive;
 
-  // 1. Check for pending utterances and auto-dequeue
+  // 1. Check for pending utterances and auto-dequeue (filtered by instance)
   // Always check for pending utterances regardless of voiceInputActive
   // This allows typed messages to be dequeued even when mic is off
-  const pendingUtterances = queue.utterances.filter(u => u.status === 'pending');
+  const pendingUtterances = queue.utterances.filter(
+    u => u.status === 'pending' && 
+         (!instanceId || !u.targetInstanceId || u.targetInstanceId === instanceId)
+  );
   if (pendingUtterances.length > 0) {
     // Always dequeue (dequeueUtterancesCore no longer requires voiceInputActive)
-    const dequeueResult = dequeueUtterancesCore();
+    const dequeueResult = dequeueUtterancesCore(instanceId);
 
     if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
       // Reverse to show oldest first
@@ -483,8 +592,8 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
     if (voiceInputActive) {
       return (async () => {
         try {
-          debugLog(`[Stop Hook] Auto-calling wait_for_utterance...`);
-          const data = await waitForUtteranceCore();
+          debugLog(`[Stop Hook] Auto-calling wait_for_utterance for instance: ${instanceId || 'any'}...`);
+          const data = await waitForUtteranceCore(instanceId);
           debugLog(`[Stop Hook] wait_for_utterance response: ${JSON.stringify(data)}`);
 
           // If error (voice input not active), treat as no utterances found
@@ -530,28 +639,37 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
 }
 
 // Dedicated hook endpoints that return in Claude's expected format
-app.post('/api/hooks/stop', async (_req: Request, res: Response) => {
-  const result = await handleHookRequest('stop');
+app.post('/api/hooks/stop', async (req: Request, res: Response) => {
+  debugLog(`[Hook/stop] Received body: ${JSON.stringify(req.body)}`);
+  const { instanceId, cwd } = req.body || {};
+  autoRegisterInstance(instanceId, cwd);
+  const result = await handleHookRequest('stop', instanceId);
   res.json(result);
 });
 
 // Pre-speak hook endpoint
-app.post('/api/hooks/pre-speak', (_req: Request, res: Response) => {
-  const result = handleHookRequest('speak');
+app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
+  debugLog(`[Hook/pre-speak] Received body: ${JSON.stringify(req.body)}`);
+  const { instanceId, cwd } = req.body || {};
+  autoRegisterInstance(instanceId, cwd);
+  const result = handleHookRequest('speak', instanceId);
   res.json(result);
 });
 
 // Post-tool hook endpoint
-app.post('/api/hooks/post-tool', (_req: Request, res: Response) => {
+app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
+  debugLog(`[Hook/post-tool] Received body: ${JSON.stringify(req.body)}`);
+  const { instanceId, cwd } = req.body || {};
+  autoRegisterInstance(instanceId, cwd);
   // Use the unified handler with 'post-tool' action
-  const result = handleHookRequest('post-tool');
+  const result = handleHookRequest('post-tool', instanceId);
   res.json(result);
 });
 
 // API to clear all utterances
 // Delete specific utterance by ID
 app.delete('/api/utterances/:id', (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = req.params.id as string;
 
   const deleted = queue.delete(id);
 
@@ -669,9 +787,96 @@ app.post('/api/voice-input-state', (req: Request, res: Response) => {
   });
 });
 
+// Instance management APIs
+app.post('/api/instances/register', (req: Request, res: Response) => {
+  const { instanceId, name, cwd } = req.body;
+
+  if (!instanceId) {
+    res.status(400).json({ error: 'instanceId is required' });
+    return;
+  }
+
+  const instance: ConnectedInstance = {
+    id: instanceId,
+    name: name || `Instance ${connectedInstances.size + 1}`,
+    cwd: cwd || 'unknown',
+    connectedAt: connectedInstances.get(instanceId)?.connectedAt || new Date(),
+    lastSeen: new Date(),
+    lastAssistantMessage: connectedInstances.get(instanceId)?.lastAssistantMessage
+  };
+
+  connectedInstances.set(instanceId, instance);
+  
+  // Auto-target first instance if none targeted
+  if (!targetInstanceId) {
+    targetInstanceId = instanceId;
+  }
+
+  debugLog(`[Instances] Registered: ${instance.name} (${instanceId}) - cwd: ${cwd}`);
+
+  res.json({
+    success: true,
+    instance,
+    isTargeted: targetInstanceId === instanceId
+  });
+});
+
+app.get('/api/instances', (_req: Request, res: Response) => {
+  const instances = Array.from(connectedInstances.values()).map(inst => ({
+    ...inst,
+    isTargeted: targetInstanceId === inst.id
+  }));
+
+  res.json({
+    instances,
+    targetInstanceId
+  });
+});
+
+app.post('/api/instances/target', (req: Request, res: Response) => {
+  const { instanceId } = req.body;
+
+  if (instanceId && !connectedInstances.has(instanceId)) {
+    res.status(404).json({ error: 'Instance not found' });
+    return;
+  }
+
+  targetInstanceId = instanceId || null;
+  debugLog(`[Instances] Target changed to: ${targetInstanceId || 'none'}`);
+
+  // Notify browser clients of target change
+  const message = JSON.stringify({ 
+    type: 'targetChanged', 
+    targetInstanceId,
+    instances: Array.from(connectedInstances.values())
+  });
+  ttsClients.forEach(client => {
+    client.write(`data: ${message}\n\n`);
+  });
+
+  res.json({
+    success: true,
+    targetInstanceId
+  });
+});
+
+app.post('/api/instances/:id/heartbeat', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const instance = connectedInstances.get(id as string);
+
+  if (!instance) {
+    res.status(404).json({ error: 'Instance not found' });
+    return;
+  }
+
+  instance.lastSeen = new Date();
+  
+  res.json({ success: true });
+});
+
 // API for text-to-speech
 app.post('/api/speak', async (req: Request, res: Response) => {
-  const { text } = req.body;
+  const { text, instanceId } = req.body;
 
   if (!text || !text.trim()) {
     res.status(400).json({ error: 'Text is required' });
@@ -689,6 +894,13 @@ app.post('/api/speak', async (req: Request, res: Response) => {
   }
 
   try {
+    // Track last assistant message for this instance
+    if (instanceId && connectedInstances.has(instanceId)) {
+      const instance = connectedInstances.get(instanceId)!;
+      instance.lastAssistantMessage = text.substring(0, 100); // Truncate for display
+      instance.lastSeen = new Date();
+    }
+
     // Always notify browser clients - they decide how to speak
     notifyTTSClients(text);
     debugLog(`[Speak] Sent text to browser for TTS: "${text}"`);
@@ -773,36 +985,74 @@ app.get('/messenger', (_req: Request, res: Response) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
-// Start HTTP server
-app.listen(HTTP_PORT, async () => {
-  if (!IS_MCP_MANAGED) {
-    console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
-    console.log(`[Mode] Running in ${IS_MCP_MANAGED ? 'MCP-managed' : 'standalone'} mode`);
-  } else {
-    // In MCP mode, write to stderr to avoid interfering with protocol
-    console.error(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
-    console.error(`[Mode] Running in MCP-managed mode`);
-  }
-
-  // Auto-open browser if no frontend connects within 3 seconds
-  const autoOpenBrowser = process.env.MCP_VOICE_HOOKS_AUTO_OPEN_BROWSER !== 'false'; // Default to true
-  if (IS_MCP_MANAGED && autoOpenBrowser) {
-    setTimeout(async () => {
-      if (ttsClients.size === 0) {
-        debugLog('[Browser] No frontend connected, opening browser...');
-        try {
-          const open = (await import('open')).default;
-          // Open default UI (messenger is now at root)
-          await open(`http://localhost:${HTTP_PORT}`);
-        } catch (error) {
-          debugLog('[Browser] Failed to open browser:', error);
-        }
+// Start HTTP server (or reuse existing one)
+async function startHttpServer() {
+  const portAvailable = await isPortAvailable(HTTP_PORT);
+  
+  if (!portAvailable) {
+    // Port is in use - check if it's a healthy voice-hooks server
+    const existingServerHealthy = await isExistingServerHealthy(HTTP_PORT);
+    
+    if (existingServerHealthy) {
+      // Reuse the existing server
+      const msg = `[HTTP] Port ${HTTP_PORT} already in use by another voice-hooks instance - reusing existing server`;
+      if (IS_MCP_MANAGED) {
+        console.error(msg);
       } else {
-        debugLog(`[Browser] Frontend already connected (${ttsClients.size} client(s))`)
+        console.log(msg);
       }
-    }, 3000);
+      isHttpServerOwner = false;
+      return; // Skip starting our own server
+    } else {
+      // Port is in use but not by a healthy voice-hooks server
+      const errorMsg = `[HTTP] Port ${HTTP_PORT} is in use by another application. Set MCP_VOICE_HOOKS_PORT to use a different port.`;
+      if (IS_MCP_MANAGED) {
+        console.error(errorMsg);
+      } else {
+        console.log(errorMsg);
+      }
+      // Continue anyway - MCP tools will fail gracefully when they can't reach the server
+      isHttpServerOwner = false;
+      return;
+    }
   }
-});
+  
+  // Port is available - start our own server
+  app.listen(HTTP_PORT, async () => {
+    isHttpServerOwner = true;
+    
+    if (!IS_MCP_MANAGED) {
+      console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
+      console.log(`[Mode] Running in ${IS_MCP_MANAGED ? 'MCP-managed' : 'standalone'} mode`);
+    } else {
+      // In MCP mode, write to stderr to avoid interfering with protocol
+      console.error(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
+      console.error(`[Mode] Running in MCP-managed mode`);
+    }
+
+    // Auto-open browser if no frontend connects within 3 seconds
+    const autoOpenBrowser = process.env.MCP_VOICE_HOOKS_AUTO_OPEN_BROWSER !== 'false'; // Default to true
+    if (IS_MCP_MANAGED && autoOpenBrowser) {
+      setTimeout(async () => {
+        if (ttsClients.size === 0) {
+          debugLog('[Browser] No frontend connected, opening browser...');
+          try {
+            const open = (await import('open')).default;
+            // Open default UI (messenger is now at root)
+            await open(`http://localhost:${HTTP_PORT}`);
+          } catch (error) {
+            debugLog('[Browser] Failed to open browser:', error);
+          }
+        } else {
+          debugLog(`[Browser] Frontend already connected (${ttsClients.size} client(s))`)
+        }
+      }, 3000);
+    }
+  });
+}
+
+// Start the HTTP server
+startHttpServer();
 
 // Helper function to get voice response reminder
 function getVoiceResponseReminder(): string {
@@ -816,6 +1066,8 @@ function getVoiceResponseReminder(): string {
 if (IS_MCP_MANAGED) {
   // Use stderr in MCP mode to avoid interfering with protocol
   console.error('[MCP] Initializing MCP server...');
+  // Note: Instance registration now happens automatically when hooks fire
+  // using session_id from Claude Code's hook context
 
   const mcpServer = new Server(
     {
