@@ -485,30 +485,71 @@ class MessengerClient {
         }
 
         this.instanceSelector.style.display = 'block';
-        this.instanceCount.textContent = this.instances.length === 1 
-            ? '(1 instance)' 
+        this.instanceCount.textContent = this.instances.length === 1
+            ? '(1 instance)'
             : `(${this.instances.length} instances)`;
 
         // Clear and rebuild instance list
         this.instanceList.innerHTML = '';
 
         this.instances.forEach(instance => {
-            const btn = document.createElement('button');
+            const btn = document.createElement('div');
             btn.className = `instance-btn ${instance.isTargeted ? 'targeted' : ''}`;
-            btn.onclick = () => this.targetInstance(instance.id);
+            btn.onclick = (e) => {
+                // Don't target if clicking the close button
+                if (e.target.closest('.instance-close-btn')) return;
+                this.targetInstance(instance.id);
+            };
+
+            const header = document.createElement('div');
+            header.className = 'instance-header';
+            header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; width: 100%;';
 
             const name = document.createElement('div');
             name.className = 'instance-name';
             name.textContent = instance.name || 'Unknown';
 
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'instance-close-btn';
+            closeBtn.innerHTML = '×';
+            closeBtn.title = 'Remove instance';
+            closeBtn.style.cssText = 'background: none; border: none; font-size: 18px; cursor: pointer; color: #999; padding: 0 4px; line-height: 1;';
+            closeBtn.onmouseover = () => closeBtn.style.color = '#EF5350';
+            closeBtn.onmouseout = () => closeBtn.style.color = '#999';
+            closeBtn.onclick = (e) => {
+                e.stopPropagation();
+                this.removeInstance(instance.id, instance.name);
+            };
+
+            header.appendChild(name);
+            header.appendChild(closeBtn);
+
             const lastActivity = document.createElement('div');
             lastActivity.className = 'instance-last-message';
             lastActivity.textContent = `Active ${this.formatRelativeTime(instance.lastSeen)}`;
 
-            btn.appendChild(name);
+            btn.appendChild(header);
             btn.appendChild(lastActivity);
             this.instanceList.appendChild(btn);
         });
+    }
+
+    async removeInstance(instanceId, instanceName) {
+        if (!confirm(`Remove instance "${instanceName}"?`)) return;
+
+        try {
+            const response = await fetch(`${this.baseUrl}/api/instances/${instanceId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                // Remove from local list
+                this.instances = this.instances.filter(inst => inst.id !== instanceId);
+                this.renderInstances();
+            }
+        } catch (error) {
+            console.error('Failed to remove instance:', error);
+        }
     }
 
     async targetInstance(instanceId) {

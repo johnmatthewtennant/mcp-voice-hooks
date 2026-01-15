@@ -92,47 +92,19 @@ const connectedInstances = new Map<string, ConnectedInstance>();
 // Currently targeted instance (for voice input routing)
 let targetInstanceId: string | null = null;
 
-// Stale instance threshold (60 seconds)
-const INSTANCE_STALE_THRESHOLD_MS = 60 * 1000;
-
-// Cleanup stale instances periodically
-function cleanupStaleInstances() {
-  const now = new Date();
-  const staleIds: string[] = [];
-  
-  connectedInstances.forEach((instance, id) => {
-    const ageMs = now.getTime() - instance.lastSeen.getTime();
-    if (ageMs > INSTANCE_STALE_THRESHOLD_MS) {
-      staleIds.push(id);
-    }
+// Helper to notify browser clients of instance changes
+function notifyInstancesChanged() {
+  const message = JSON.stringify({
+    type: 'instancesChanged',
+    instances: Array.from(connectedInstances.values()).map(inst => ({
+      ...inst,
+      isTargeted: targetInstanceId === inst.id
+    })),
+    targetInstanceId
   });
-  
-  if (staleIds.length > 0) {
-    staleIds.forEach(id => {
-      debugLog(`[Instances] Removing stale instance: ${connectedInstances.get(id)?.name} (${id})`);
-      connectedInstances.delete(id);
-    });
-    
-    // If targeted instance was removed, target another one
-    if (targetInstanceId && !connectedInstances.has(targetInstanceId)) {
-      const remaining = Array.from(connectedInstances.keys());
-      targetInstanceId = remaining.length > 0 ? remaining[0] : null;
-      debugLog(`[Instances] Target changed to: ${targetInstanceId || 'none'}`);
-    }
-    
-    // Notify browser clients
-    const message = JSON.stringify({ 
-      type: 'instancesChanged', 
-      instances: Array.from(connectedInstances.values()).map(inst => ({
-        ...inst,
-        isTargeted: targetInstanceId === inst.id
-      })),
-      targetInstanceId
-    });
-    ttsClients.forEach(client => {
-      client.write(`data: ${message}\n\n`);
-    });
-  }
+  ttsClients.forEach(client => {
+    client.write(`data: ${message}\n\n`);
+  });
 }
 
 // Shared utterance queue
@@ -744,9 +716,6 @@ app.delete('/api/utterances', (_req: Request, res: Response) => {
 // Server-Sent Events for TTS notifications
 const ttsClients = new Set<Response>();
 
-// Start stale instance cleanup (runs every 10 seconds)
-setInterval(cleanupStaleInstances, 10 * 1000);
-
 app.get('/api/tts-events', (_req: Request, res: Response) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -916,8 +885,34 @@ app.post('/api/instances/:id/heartbeat', (req: Request, res: Response) => {
   }
 
   instance.lastSeen = new Date();
-  
+
   res.json({ success: true });
+});
+
+// Manually remove an instance
+app.delete('/api/instances/:id', (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  const instance = connectedInstances.get(id);
+
+  if (!instance) {
+    res.status(404).json({ error: 'Instance not found' });
+    return;
+  }
+
+  debugLog(`[Instances] Manually removing instance: ${instance.name} (${id})`);
+  connectedInstances.delete(id);
+
+  // If targeted instance was removed, target another one
+  if (targetInstanceId === id) {
+    const remaining = Array.from(connectedInstances.keys());
+    targetInstanceId = remaining.length > 0 ? remaining[0] : null;
+    debugLog(`[Instances] Target changed to: ${targetInstanceId || 'none'}`);
+  }
+
+  // Notify browser clients
+  notifyInstancesChanged();
+
+  res.json({ success: true, message: `Instance ${instance.name} removed` });
 });
 
 // API for text-to-speech
