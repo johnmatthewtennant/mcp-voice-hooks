@@ -357,7 +357,13 @@ class MessengerClient {
     setupEventListeners() {
         // Text input events
         this.messageInput.addEventListener('keydown', (e) => this.handleTextInputKeydown(e));
-        this.messageInput.addEventListener('input', () => this.autoGrowTextarea());
+        this.messageInput.addEventListener('input', () => {
+            this.autoGrowTextarea();
+            // Sync accumulatedText with manual edits (prevents restoring deleted text)
+            if (!this.isInterimText) {
+                this.accumulatedText = this.messageInput.value;
+            }
+        });
 
         // Microphone button
         this.micBtn.addEventListener('click', () => this.toggleVoiceDictation());
@@ -493,12 +499,12 @@ class MessengerClient {
             name.className = 'instance-name';
             name.textContent = instance.name || 'Unknown';
 
-            const lastMsg = document.createElement('div');
-            lastMsg.className = 'instance-last-message';
-            lastMsg.textContent = instance.lastAssistantMessage || 'No messages yet';
+            const lastActivity = document.createElement('div');
+            lastActivity.className = 'instance-last-message';
+            lastActivity.textContent = `Active ${this.formatRelativeTime(instance.lastSeen)}`;
 
             btn.appendChild(name);
-            btn.appendChild(lastMsg);
+            btn.appendChild(lastActivity);
             this.instanceList.appendChild(btn);
         });
     }
@@ -653,6 +659,20 @@ class MessengerClient {
     formatTimestamp(timestamp) {
         const date = new Date(timestamp);
         return date.toLocaleTimeString();
+    }
+
+    formatRelativeTime(timestamp) {
+        const now = new Date();
+        const then = new Date(timestamp);
+        const diffMs = now - then;
+        const diffSec = Math.floor(diffMs / 1000);
+        
+        if (diffSec < 5) return 'just now';
+        if (diffSec < 60) return `${diffSec}s ago`;
+        const diffMin = Math.floor(diffSec / 60);
+        if (diffMin < 60) return `${diffMin}m ago`;
+        const diffHr = Math.floor(diffMin / 60);
+        return `${diffHr}h ago`;
     }
 
     // Text input handling

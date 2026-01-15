@@ -92,6 +92,49 @@ const connectedInstances = new Map<string, ConnectedInstance>();
 // Currently targeted instance (for voice input routing)
 let targetInstanceId: string | null = null;
 
+// Stale instance threshold (60 seconds)
+const INSTANCE_STALE_THRESHOLD_MS = 60 * 1000;
+
+// Cleanup stale instances periodically
+function cleanupStaleInstances() {
+  const now = new Date();
+  const staleIds: string[] = [];
+  
+  connectedInstances.forEach((instance, id) => {
+    const ageMs = now.getTime() - instance.lastSeen.getTime();
+    if (ageMs > INSTANCE_STALE_THRESHOLD_MS) {
+      staleIds.push(id);
+    }
+  });
+  
+  if (staleIds.length > 0) {
+    staleIds.forEach(id => {
+      debugLog(`[Instances] Removing stale instance: ${connectedInstances.get(id)?.name} (${id})`);
+      connectedInstances.delete(id);
+    });
+    
+    // If targeted instance was removed, target another one
+    if (targetInstanceId && !connectedInstances.has(targetInstanceId)) {
+      const remaining = Array.from(connectedInstances.keys());
+      targetInstanceId = remaining.length > 0 ? remaining[0] : null;
+      debugLog(`[Instances] Target changed to: ${targetInstanceId || 'none'}`);
+    }
+    
+    // Notify browser clients
+    const message = JSON.stringify({ 
+      type: 'instancesChanged', 
+      instances: Array.from(connectedInstances.values()).map(inst => ({
+        ...inst,
+        isTargeted: targetInstanceId === inst.id
+      })),
+      targetInstanceId
+    });
+    ttsClients.forEach(client => {
+      client.write(`data: ${message}\n\n`);
+    });
+  }
+}
+
 // Shared utterance queue
 interface Utterance {
   id: string;
@@ -701,6 +744,9 @@ app.delete('/api/utterances', (_req: Request, res: Response) => {
 // Server-Sent Events for TTS notifications
 const ttsClients = new Set<Response>();
 
+// Start stale instance cleanup (runs every 10 seconds)
+setInterval(cleanupStaleInstances, 10 * 1000);
+
 app.get('/api/tts-events', (_req: Request, res: Response) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -895,10 +941,16 @@ app.post('/api/speak', async (req: Request, res: Response) => {
 
   try {
     // Track last assistant message for this instance
-    if (instanceId && connectedInstances.has(instanceId)) {
-      const instance = connectedInstances.get(instanceId)!;
+    // Use provided instanceId, or fall back to targetInstanceId
+    const effectiveInstanceId = instanceId || targetInstanceId;
+    debugLog(`[Speak] instanceId=${instanceId}, targetInstanceId=${targetInstanceId}, effectiveInstanceId=${effectiveInstanceId}, instances=${Array.from(connectedInstances.keys()).join(',')}`);
+    if (effectiveInstanceId && connectedInstances.has(effectiveInstanceId)) {
+      const instance = connectedInstances.get(effectiveInstanceId)!;
       instance.lastAssistantMessage = text.substring(0, 100); // Truncate for display
       instance.lastSeen = new Date();
+      debugLog(`[Speak] Updated lastAssistantMessage for ${effectiveInstanceId}: "${instance.lastAssistantMessage}"`);
+    } else {
+      debugLog(`[Speak] No instance found for effectiveInstanceId=${effectiveInstanceId}`);
     }
 
     // Always notify browser clients - they decide how to speak
