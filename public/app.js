@@ -20,6 +20,12 @@ class MessengerClient {
         this.instanceList = document.getElementById('instanceList');
         this.instanceCount = document.getElementById('instanceCount');
 
+        // Set up event delegation for instance list (prevents stale click handlers)
+        this.instanceList.addEventListener('click', (e) => this.handleInstanceListClick(e));
+
+        // Restart button
+        this.restartBtn = document.getElementById('restartBtn');
+
         // Settings
         this.settingsToggleHeader = document.getElementById('settingsToggleHeader');
         this.settingsContent = document.getElementById('settingsContent');
@@ -445,6 +451,39 @@ class MessengerClient {
                 this.speakText('This is Voice Mode for Claude Code. How can I help you today?');
             });
         }
+
+        // Restart button
+        if (this.restartBtn) {
+            this.restartBtn.addEventListener('click', () => this.restartServer());
+        }
+    }
+
+    async restartServer() {
+        if (!confirm('Restart the voice hooks server?')) return;
+
+        try {
+            const response = await fetch(`${this.baseUrl}/api/restart`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                // Server will restart, page will lose connection
+                // Show a message and attempt to reconnect
+                document.body.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 16px;"><h2>Server restarting...</h2><p>Reconnecting in a moment...</p></div>';
+
+                // Try to reconnect after a delay
+                setTimeout(() => {
+                    window.location.reload();
+                }, 2000);
+            }
+        } catch (error) {
+            // Connection lost means server is restarting
+            document.body.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 16px;"><h2>Server restarting...</h2><p>Reconnecting in a moment...</p></div>';
+
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        }
     }
 
     async loadData() {
@@ -477,6 +516,29 @@ class MessengerClient {
         }
     }
 
+    // Event delegation handler for instance list clicks
+    handleInstanceListClick(e) {
+        // Check if clicking a close button
+        const closeBtn = e.target.closest('.instance-close-btn');
+        if (closeBtn) {
+            e.stopPropagation();
+            const instanceBtn = closeBtn.closest('.instance-btn');
+            if (instanceBtn) {
+                const instanceId = instanceBtn.dataset.instanceId;
+                const instanceName = instanceBtn.dataset.instanceName;
+                this.removeInstance(instanceId, instanceName);
+            }
+            return;
+        }
+
+        // Check if clicking an instance button (to target it)
+        const instanceBtn = e.target.closest('.instance-btn');
+        if (instanceBtn) {
+            const instanceId = instanceBtn.dataset.instanceId;
+            this.targetInstance(instanceId);
+        }
+    }
+
     renderInstances() {
         // Show/hide selector based on instance count
         if (this.instances.length === 0) {
@@ -495,11 +557,9 @@ class MessengerClient {
         this.instances.forEach(instance => {
             const btn = document.createElement('div');
             btn.className = `instance-btn ${instance.isTargeted ? 'targeted' : ''}`;
-            btn.onclick = (e) => {
-                // Don't target if clicking the close button
-                if (e.target.closest('.instance-close-btn')) return;
-                this.targetInstance(instance.id);
-            };
+            // Store instance data on the element for event delegation
+            btn.dataset.instanceId = instance.id;
+            btn.dataset.instanceName = instance.name || 'Unknown';
 
             const header = document.createElement('div');
             header.className = 'instance-header';
@@ -516,10 +576,6 @@ class MessengerClient {
             closeBtn.style.cssText = 'background: none; border: none; font-size: 18px; cursor: pointer; color: #999; padding: 0 4px; line-height: 1;';
             closeBtn.onmouseover = () => closeBtn.style.color = '#EF5350';
             closeBtn.onmouseout = () => closeBtn.style.color = '#999';
-            closeBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.removeInstance(instance.id, instance.name);
-            };
 
             header.appendChild(name);
             header.appendChild(closeBtn);

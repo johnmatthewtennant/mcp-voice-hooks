@@ -654,6 +654,13 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
 }
 
 // Dedicated hook endpoints that return in Claude's expected format
+app.post('/api/hooks/session-start', (req: Request, res: Response) => {
+  debugLog(`[Hook/session-start] Received body: ${JSON.stringify(req.body)}`);
+  const { instanceId, cwd } = req.body || {};
+  autoRegisterInstance(instanceId, cwd);
+  res.json({ decision: 'approve' });
+});
+
 app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   debugLog(`[Hook/stop] Received body: ${JSON.stringify(req.body)}`);
   const { instanceId, cwd } = req.body || {};
@@ -1012,6 +1019,21 @@ app.post('/api/speak-system', async (req: Request, res: Response) => {
       details: error instanceof Error ? error.message : String(error)
     });
   }
+});
+
+// Server restart endpoint
+app.post('/api/restart', (_req: Request, res: Response) => {
+  debugLog('[Server] Restart requested via API');
+
+  // Send response before exiting
+  res.json({ success: true, message: 'Server restarting...' });
+
+  // Give time for response to be sent, then exit
+  // The process manager (MCP, pm2, systemd, etc.) should restart the server
+  setTimeout(() => {
+    debugLog('[Server] Exiting for restart...');
+    process.exit(0);
+  }, 100);
 });
 
 // UI Routing

@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '{instanceId: .session_id, cwd: .cwd}' | curl -s -X POST -H 'Content-Type: application/json' -d @- \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/session-start\" || echo '{}'"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
