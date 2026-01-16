@@ -27,7 +27,11 @@ async function main() {
       await configureClaudeCodeSettings();
 
       console.log('\n✅ Installation complete!');
-      console.log('📝 To add the server to Claude Code, run: `claude mcp add voice-hooks npx mcp-voice-hooks@latest`');
+      console.log('📝 To add the server to Claude Code, run: `npx mcp-voice-hooks@latest setup-mcp`');
+    } else if (command === 'setup-mcp') {
+      // Cross-platform MCP server registration
+      console.log('🔧 Setting up MCP server for Claude Code...');
+      await setupMCPServer();
     } else if (command === 'uninstall') {
       console.log('🗑️  Uninstalling MCP Voice Hooks...');
       await uninstall();
@@ -128,6 +132,59 @@ async function configureClaudeCodeSettings() {
   // Write settings back
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
   console.log('✅ Updated project Claude Code settings');
+}
+
+// Cross-platform MCP server setup
+async function setupMCPServer() {
+  const isWindows = process.platform === 'win32';
+
+  console.log(`📍 Detected platform: ${isWindows ? 'Windows' : 'Mac/Linux'}`);
+
+  // Build the appropriate command based on OS
+  let mcpCommand, mcpArgs;
+
+  if (isWindows) {
+    // Windows needs cmd /c wrapper because npx is a batch file (npx.cmd)
+    mcpCommand = 'cmd';
+    mcpArgs = ['/c', 'npx', 'mcp-voice-hooks@latest'];
+    console.log('🪟 Using Windows-compatible command wrapper (cmd /c)');
+  } else {
+    // Mac/Linux can run npx directly
+    mcpCommand = 'npx';
+    mcpArgs = ['mcp-voice-hooks@latest'];
+  }
+
+  // Run claude mcp add command
+  const claudeArgs = ['mcp', 'add', 'voice-hooks', mcpCommand, ...mcpArgs];
+  console.log(`🔄 Running: claude ${claudeArgs.join(' ')}`);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('claude', claudeArgs, {
+      stdio: 'inherit',
+      shell: isWindows // Use shell on Windows for better compatibility
+    });
+
+    child.on('error', (error) => {
+      console.error('❌ Failed to run claude mcp add:', error.message);
+      console.log('\n💡 Make sure Claude Code CLI is installed: npm install -g @anthropic-ai/claude-code');
+      reject(error);
+    });
+
+    child.on('exit', (code) => {
+      if (code === 0) {
+        console.log('\n✅ MCP server registered successfully!');
+        console.log('🎤 Voice hooks is now ready to use.');
+        console.log('\n📝 Next steps:');
+        console.log('   1. Start Claude Code: claude');
+        console.log('   2. The browser interface will open automatically');
+        console.log('   3. Click "Start Listening" and start talking!');
+        resolve();
+      } else {
+        console.error(`❌ claude mcp add exited with code ${code}`);
+        reject(new Error(`Exit code: ${code}`));
+      }
+    });
+  });
 }
 
 // Silent hook installation check - runs on every startup

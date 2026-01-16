@@ -28,8 +28,12 @@ npm install -g @anthropic-ai/claude-code
 
 ```bash
 npx mcp-voice-hooks@latest install-hooks
-claude mcp add voice-hooks npx mcp-voice-hooks@latest
+npx mcp-voice-hooks@latest setup-mcp
 ```
+
+The `setup-mcp` command automatically detects your operating system and configures the MCP server correctly:
+- **Windows**: Uses `cmd /c npx` wrapper (required because npx.cmd is a batch file)
+- **Mac/Linux**: Uses `npx` directly
 
 ## Usage
 
