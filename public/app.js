@@ -591,8 +591,6 @@ class MessengerClient {
     }
 
     async removeInstance(instanceId, instanceName) {
-        if (!confirm(`Remove instance "${instanceName}"?`)) return;
-
         try {
             const response = await fetch(`${this.baseUrl}/api/instances/${instanceId}`, {
                 method: 'DELETE'
