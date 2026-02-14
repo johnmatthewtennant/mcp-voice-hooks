@@ -13,7 +13,7 @@ describe('Voice Input State Error Handling', () => {
   });
 
   describe('POST /api/dequeue-utterances', () => {
-    it('should return 400 error when voice input is not active', async () => {
+    it('should allow dequeue even when voice input is not active', async () => {
       // Add an utterance
       await fetch(`${server.url}/api/potential-utterances`, {
         method: 'POST',
@@ -21,7 +21,7 @@ describe('Voice Input State Error Handling', () => {
         body: JSON.stringify({ text: 'Test utterance' })
       });
 
-      // Try to dequeue without activating voice input
+      // Dequeue should work without activating voice input (allows typed messages)
       const response = await fetch(`${server.url}/api/dequeue-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -29,9 +29,9 @@ describe('Voice Input State Error Handling', () => {
 
       const data = await response.json() as any;
 
-      expect(response.status).toBe(400);
-      expect(data.success).toBe(false);
-      expect(data.error).toContain('Voice input is not active');
+      expect(response.status).toBe(200);
+      expect(data.success).toBe(true);
+      expect(data.utterances.length).toBe(1);
     });
 
     it('should dequeue utterances successfully when voice input is active', async () => {
@@ -171,20 +171,20 @@ describe('Voice Input State Error Handling', () => {
   });
 
   describe('Voice input state transitions', () => {
-    it('should allow dequeue when voice input is activated', async () => {
-      // Add an utterance
+    it('should allow dequeue regardless of voice input state', async () => {
+      // Add an utterance without voice input active
       await fetch(`${server.url}/api/potential-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: 'Test' })
+        body: JSON.stringify({ text: 'Test 1' })
       });
 
-      // Dequeue should fail when voice input is off
+      // Dequeue should work even when voice input is off
       let response = await fetch(`${server.url}/api/dequeue-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(200);
 
       // Activate voice input
       await fetch(`${server.url}/api/voice-input`, {
@@ -193,7 +193,14 @@ describe('Voice Input State Error Handling', () => {
         body: JSON.stringify({ active: true })
       });
 
-      // Now dequeue should succeed
+      // Add another utterance
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Test 2' })
+      });
+
+      // Dequeue should also work when voice input is on
       response = await fetch(`${server.url}/api/dequeue-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -201,7 +208,7 @@ describe('Voice Input State Error Handling', () => {
       expect(response.status).toBe(200);
     });
 
-    it('should prevent dequeue when voice input is deactivated', async () => {
+    it('should allow dequeue after voice input is deactivated', async () => {
       // Enable voice input
       await fetch(`${server.url}/api/voice-input`, {
         method: 'POST',
@@ -237,12 +244,12 @@ describe('Voice Input State Error Handling', () => {
         body: JSON.stringify({ active: false })
       });
 
-      // Now dequeue should fail
+      // Dequeue should still work (allows typed messages)
       response = await fetch(`${server.url}/api/dequeue-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
-      expect(response.status).toBe(400);
+      expect(response.status).toBe(200);
     });
   });
 });

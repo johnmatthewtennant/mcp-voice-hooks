@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "voice-hooks": {
+      "command": "node",
+      "args": [
+        "dist/unified-server.js",
+        "--mcp-managed"
+      ],
+      "env": {
+        "MCP_VOICE_HOOKS_PORT": "5111"
+      }
+    }
+  }
+}

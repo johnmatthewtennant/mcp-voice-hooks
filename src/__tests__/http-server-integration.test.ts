@@ -224,15 +224,16 @@ describe('HTTP Server Integration Tests', () => {
   });
 
   describe('POST /api/dequeue-utterances', () => {
-    it('should return error when voice input is not active', async () => {
-      // Add an utterance
+    it('should dequeue utterances even when voice input is not active', async () => {
+      // Add an utterance without activating voice input
       await fetch(`${server.url}/api/potential-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'Test' })
       });
 
-      // Try to dequeue without activating voice input
+      // Dequeue should work even without voice input active
+      // This allows typed messages to be dequeued
       const response = await fetch(`${server.url}/api/dequeue-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -240,9 +241,10 @@ describe('HTTP Server Integration Tests', () => {
 
       const data = await response.json() as any;
 
-      expect(response.status).toBe(400);
-      expect(data.success).toBe(false);
-      expect(data.error).toContain('Voice input is not active');
+      expect(response.status).toBe(200);
+      expect(data.success).toBe(true);
+      expect(data.utterances.length).toBe(1);
+      expect(data.utterances[0].text).toBe('Test');
     });
 
     it('should dequeue pending utterances and mark them as delivered', async () => {

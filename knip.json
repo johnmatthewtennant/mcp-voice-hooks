@@ -12,5 +12,8 @@
   "ignoreBinaries": [
     "knip",
     "ts-prune"
+  ],
+  "ignoreDependencies": [
+    "@types/eventsource"
   ]
 }

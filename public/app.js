@@ -38,22 +38,33 @@ class MessengerClient {
         this.accumulatedText = ''; // For trigger word mode
         this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
 
+        // Feature flags
+        this.USE_SSE = true; // Toggle between SSE (true) and polling (false)
+
         // TTS state
         this.voices = [];
         this.selectedVoice = 'system';
         this.speechRate = 1.0;
         this.speechPitch = 1.0;
 
+        // Conversation cache
+        this.conversationCache = new Map(); // id -> message
+
         // Initialize
         this.initializeSpeechRecognition();
         this.initializeSpeechSynthesis();
-        this.initializeTTSEvents();
+        this.initializeSSE(); // Renamed from initializeTTSEvents
         this.setupEventListeners();
         this.loadPreferences();
         this.loadData();
 
-        // Auto-refresh every 2 seconds
-        setInterval(() => this.loadData(), 2000);
+        // Auto-refresh with polling (only if SSE disabled)
+        if (!this.USE_SSE) {
+            setInterval(() => this.loadData(), 2000);
+            this.debugLog('[Polling] Enabled (SSE disabled)');
+        } else {
+            this.debugLog('[SSE] Enabled (polling disabled)');
+        }
     }
 
     debugLog(...args) {
@@ -103,26 +114,67 @@ class MessengerClient {
         }
     }
 
-    initializeTTSEvents() {
-        // Connect to SSE for TTS events
-        this.eventSource = new EventSource(`${this.baseUrl}/api/tts-events`);
+    initializeSSE() {
+        // Connect to SSE for real-time updates
+        this.eventSource = new EventSource(`${this.baseUrl}/api/events`);
+
+        this.eventSource.onopen = () => {
+            this.debugLog('[SSE] Connected to server');
+        };
 
         this.eventSource.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
+                this.debugLog('[SSE] Received event:', data.type, data);
 
-                if (data.type === 'speak' && data.text) {
-                    this.speakText(data.text);
-                } else if (data.type === 'waitStatus') {
-                    this.handleWaitStatus(data.isWaiting);
+                switch (data.type) {
+                    case 'connected':
+                        this.debugLog('[SSE] Connection confirmed');
+                        break;
+
+                    case 'speak':
+                        if (data.text) {
+                            this.speakText(data.text);
+                        }
+                        break;
+
+                    case 'waitStatus':
+                        this.handleWaitStatus(data.isWaiting);
+                        break;
+
+                    case 'utterance-added':
+                        if (data.utterance) {
+                            this.handleUtteranceAdded(data.utterance);
+                        }
+                        break;
+
+                    case 'utterance-status-changed':
+                        if (data.utterance) {
+                            this.handleUtteranceStatusChanged(data.utterance);
+                        }
+                        break;
+
+                    case 'utterance-deleted':
+                        if (data.id) {
+                            this.handleUtteranceDeleted(data.id);
+                        }
+                        break;
+
+                    case 'queue-cleared':
+                        this.handleQueueCleared();
+                        break;
+
+                    default:
+                        this.debugLog('[SSE] Unknown event type:', data.type);
                 }
             } catch (error) {
-                console.error('Failed to parse TTS event:', error);
+                console.error('Failed to parse SSE event:', error);
             }
         };
 
         this.eventSource.onerror = (error) => {
             console.error('SSE connection error:', error);
+            // EventSource will automatically reconnect
         };
     }
 
@@ -133,6 +185,87 @@ class MessengerClient {
             if (isWaiting) {
                 this.scrollToBottom();
             }
+        }
+    }
+
+    handleUtteranceAdded(utterance) {
+        this.debugLog('[SSE] Utterance added:', utterance);
+
+        // Update cache
+        this.conversationCache.set(utterance.id, {
+            id: utterance.id,
+            role: 'user',
+            text: utterance.text,
+            timestamp: new Date(utterance.timestamp),
+            status: utterance.status
+        });
+
+        // Add message bubble to conversation
+        this.addMessageBubble({
+            id: utterance.id,
+            role: 'user',
+            text: utterance.text,
+            timestamp: new Date(utterance.timestamp),
+            status: utterance.status
+        });
+
+        this.scrollToBottom();
+    }
+
+    handleUtteranceStatusChanged(utterance) {
+        this.debugLog('[SSE] Utterance status changed:', utterance);
+
+        // Update cache
+        if (this.conversationCache.has(utterance.id)) {
+            const cached = this.conversationCache.get(utterance.id);
+            cached.status = utterance.status;
+        }
+
+        // Update existing message bubble
+        const bubble = this.conversationMessages.querySelector(`[data-message-id="${utterance.id}"]`);
+        if (bubble) {
+            const statusEl = bubble.querySelector('.message-status');
+            if (statusEl) {
+                statusEl.className = `message-status ${utterance.status}`;
+                statusEl.textContent = utterance.status.toUpperCase();
+            }
+        }
+    }
+
+    handleUtteranceDeleted(id) {
+        this.debugLog('[SSE] Utterance deleted:', id);
+
+        // Remove from cache
+        this.conversationCache.delete(id);
+
+        // Remove message bubble
+        const bubble = this.conversationMessages.querySelector(`[data-message-id="${id}"]`);
+        if (bubble) {
+            bubble.remove();
+        }
+
+        // Show empty state if no messages left
+        this.checkEmptyState();
+    }
+
+    handleQueueCleared() {
+        this.debugLog('[SSE] Queue cleared');
+
+        // Clear cache
+        this.conversationCache.clear();
+
+        // Remove all message bubbles
+        this.conversationMessages.querySelectorAll('.message-bubble').forEach(el => el.remove());
+
+        // Show empty state
+        this.checkEmptyState();
+    }
+
+    checkEmptyState() {
+        const emptyState = this.conversationMessages.querySelector('.empty-state');
+        const hasBubbles = this.conversationMessages.querySelectorAll('.message-bubble').length > 0;
+        if (emptyState) {
+            emptyState.style.display = hasBubbles ? 'none' : 'flex';
         }
     }
 
@@ -554,6 +687,34 @@ class MessengerClient {
         bubble.appendChild(messageMeta);
 
         return bubble;
+    }
+
+    addMessageBubble(message) {
+        // Check if bubble already exists
+        const existing = this.conversationMessages.querySelector(`[data-message-id="${message.id}"]`);
+        if (existing) {
+            this.debugLog('[UI] Message bubble already exists:', message.id);
+            return;
+        }
+
+        // Create and add bubble
+        const bubble = this.createMessageBubble(message);
+        const emptyState = this.conversationMessages.querySelector('.empty-state');
+        const waitingIndicator = this.conversationMessages.querySelector('#waitingIndicator');
+
+        // Hide empty state
+        if (emptyState) {
+            emptyState.style.display = 'none';
+        }
+
+        // Insert before waiting indicator if it exists, otherwise append
+        if (waitingIndicator) {
+            this.conversationMessages.insertBefore(bubble, waitingIndicator);
+        } else {
+            this.conversationMessages.appendChild(bubble);
+        }
+
+        this.debugLog('[UI] Added message bubble:', message.id);
     }
 
     scrollToBottom() {

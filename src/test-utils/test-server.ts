@@ -1,5 +1,5 @@
 import express from 'express';
-import type { Express } from 'express';
+import type { Express, Response } from 'express';
 import http from 'http';
 import { AddressInfo } from 'net';
 import cors from 'cors';
@@ -128,6 +128,7 @@ export class TestServer {
   private voicePreferences: VoicePreferences;
   private lastToolUseTimestamp: Date | null = null;
   private lastSpeakTimestamp: Date | null = null;
+  private sseClients: Set<Response> = new Set();
   public port: number = 0;
   public url: string = '';
 
@@ -143,12 +144,76 @@ export class TestServer {
     this.setupRoutes();
   }
 
+  // Helper function to broadcast SSE events
+  private broadcastSSE(eventType: string, data: any): void {
+    const message = JSON.stringify({ type: eventType, ...data });
+    this.sseClients.forEach(client => {
+      try {
+        client.write(`data: ${message}\n\n`);
+      } catch (error) {
+        // Client may have disconnected
+      }
+    });
+  }
+
+  private broadcastUtteranceAdded(utterance: Utterance): void {
+    this.broadcastSSE('utterance-added', { utterance });
+  }
+
+  private broadcastUtteranceStatusChanged(utterance: Utterance): void {
+    this.broadcastSSE('utterance-status-changed', { utterance });
+  }
+
+  private broadcastUtteranceDeleted(id: string): void {
+    this.broadcastSSE('utterance-deleted', { id });
+  }
+
+  private broadcastQueueCleared(): void {
+    this.broadcastSSE('queue-cleared', {});
+  }
+
   private setupMiddleware(): void {
     this.app.use(cors());
     this.app.use(express.json());
   }
 
   private setupRoutes(): void {
+    // SSE endpoint for real-time updates
+    this.app.get('/api/events', (req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      });
+
+      // Send initial connection message
+      res.write('data: {"type":"connected"}\n\n');
+
+      // Add client to set
+      this.sseClients.add(res);
+
+      // Remove client on disconnect
+      req.on('close', () => {
+        this.sseClients.delete(res);
+      });
+    });
+
+    // Backward compatibility endpoint
+    this.app.get('/api/tts-events', (req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      });
+
+      res.write('data: {"type":"connected"}\n\n');
+      this.sseClients.add(res);
+
+      req.on('close', () => {
+        this.sseClients.delete(res);
+      });
+    });
+
     // POST /api/potential-utterances
     this.app.post('/api/potential-utterances', (req, res) => {
       const { text, timestamp } = req.body;
@@ -160,6 +225,10 @@ export class TestServer {
 
       const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
       const utterance = this.queue.add(text, parsedTimestamp);
+
+      // Broadcast SSE event
+      this.broadcastUtteranceAdded(utterance);
+
       res.json({
         success: true,
         utterance: {
@@ -235,6 +304,8 @@ export class TestServer {
       if (pendingUtterances.length > 0) {
         pendingUtterances.forEach(u => {
           this.queue.markDelivered(u.id);
+          // Broadcast status change
+          this.broadcastUtteranceStatusChanged(u);
         });
 
         res.json({
@@ -262,20 +333,16 @@ export class TestServer {
 
     // POST /api/dequeue-utterances
     this.app.post('/api/dequeue-utterances', (_req, res) => {
-      if (!this.voicePreferences.voiceInputActive) {
-        res.status(400).json({
-          success: false,
-          error: 'Voice input is not active. Cannot dequeue utterances when voice input is disabled.'
-        });
-        return;
-      }
-
+      // Always dequeue pending utterances regardless of voiceInputActive
+      // This allows both typed and spoken messages to be dequeued
       const pendingUtterances = this.queue.utterances
         .filter(u => u.status === 'pending')
         .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
       pendingUtterances.forEach(u => {
         this.queue.markDelivered(u.id);
+        // Broadcast status change
+        this.broadcastUtteranceStatusChanged(u);
       });
 
       res.json({
@@ -315,6 +382,8 @@ export class TestServer {
         const deliveredUtterances = this.queue.utterances.filter(u => u.status === 'delivered');
         deliveredUtterances.forEach(u => {
           this.queue.markResponded(u.id);
+          // Broadcast status change
+          this.broadcastUtteranceStatusChanged(u);
         });
 
         this.lastSpeakTimestamp = new Date();
@@ -355,7 +424,7 @@ export class TestServer {
       }
     });
 
-    // POST /api/voice-input
+    // POST /api/voice-input (backward compatibility)
     this.app.post('/api/voice-input', (req, res) => {
       const { active } = req.body;
 
@@ -368,7 +437,23 @@ export class TestServer {
       res.json({ success: true });
     });
 
-    // POST /api/voice-responses
+    // POST /api/voice-input-state (matches real server)
+    this.app.post('/api/voice-input-state', (req, res) => {
+      const { active } = req.body;
+
+      if (typeof active !== 'boolean') {
+        res.status(400).json({ error: 'active must be a boolean' });
+        return;
+      }
+
+      this.voicePreferences.voiceInputActive = active;
+      res.json({
+        success: true,
+        voiceInputActive: active
+      });
+    });
+
+    // POST /api/voice-responses (backward compatibility)
     this.app.post('/api/voice-responses', (req, res) => {
       const { enabled } = req.body;
 
@@ -381,10 +466,60 @@ export class TestServer {
       res.json({ success: true });
     });
 
-    // DELETE /api/utterances
+    // POST /api/voice-preferences (matches real server)
+    this.app.post('/api/voice-preferences', (req, res) => {
+      const { voiceResponsesEnabled } = req.body;
+
+      if (typeof voiceResponsesEnabled !== 'boolean') {
+        res.status(400).json({ error: 'voiceResponsesEnabled must be a boolean' });
+        return;
+      }
+
+      this.voicePreferences.voiceResponsesEnabled = voiceResponsesEnabled;
+      res.json({
+        success: true,
+        preferences: this.voicePreferences
+      });
+    });
+
+    // DELETE /api/utterances/:id (delete single utterance)
+    this.app.delete('/api/utterances/:id', (req, res) => {
+      const { id } = req.params;
+      const utterance = this.queue.utterances.find(u => u.id === id);
+
+      // Only allow deleting pending messages
+      if (utterance && utterance.status === 'pending') {
+        this.queue.utterances = this.queue.utterances.filter(u => u.id !== id);
+        this.queue.messages = this.queue.messages.filter(m => m.id !== id);
+
+        // Broadcast delete event
+        this.broadcastUtteranceDeleted(id);
+
+        res.json({
+          success: true,
+          message: 'Message deleted'
+        });
+      } else {
+        res.status(400).json({
+          error: 'Only pending messages can be deleted',
+          success: false
+        });
+      }
+    });
+
+    // DELETE /api/utterances (delete all)
     this.app.delete('/api/utterances', (_req, res) => {
+      const clearedCount = this.queue.utterances.length;
       this.queue.clear();
-      res.json({ success: true });
+
+      // Broadcast queue cleared event
+      this.broadcastQueueCleared();
+
+      res.json({
+        success: true,
+        message: `Cleared ${clearedCount} utterances`,
+        clearedCount
+      });
     });
 
     // POST /api/validate-action

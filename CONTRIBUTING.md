@@ -42,3 +42,4 @@ For minor/major versions:
 npm version minor && git push --follow-tags
 npm version major && git push --follow-tags
 ```
+

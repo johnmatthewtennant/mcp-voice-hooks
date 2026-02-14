@@ -79,6 +79,10 @@ class UtteranceQueue {
     });
 
     debugLog(`[Queue] queued: "${utterance.text}"	[id: ${utterance.id}]`);
+
+    // Broadcast SSE event
+    broadcastUtteranceAdded(utterance);
+
     return utterance;
   }
 
@@ -117,6 +121,9 @@ class UtteranceQueue {
       if (message) {
         message.status = 'delivered';
       }
+
+      // Broadcast SSE event
+      broadcastUtteranceStatusChanged(utterance);
     }
   }
 
@@ -128,6 +135,10 @@ class UtteranceQueue {
       this.utterances = this.utterances.filter(u => u.id !== id);
       this.messages = this.messages.filter(m => m.id !== id);
       debugLog(`[Queue] Deleted pending message: "${utterance.text}"	[id: ${id}]`);
+
+      // Broadcast SSE event
+      broadcastUtteranceDeleted(id);
+
       return true;
     }
 
@@ -139,6 +150,9 @@ class UtteranceQueue {
     this.utterances = [];
     this.messages = []; // Clear conversation history too
     debugLog(`[Queue] Cleared ${count} utterances and conversation history`);
+
+    // Broadcast SSE event
+    broadcastQueueCleared();
   }
 }
 
@@ -423,33 +437,51 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
   const voiceInputActive = voicePreferences.voiceInputActive;
 
+  debugLog(`[Hook] ${attemptedAction} - Checking queue (${queue.utterances.length} total utterances)`);
+
   // 1. Check for pending utterances and auto-dequeue
   // Always check for pending utterances regardless of voiceInputActive
   // This allows typed messages to be dequeued even when mic is off
   const pendingUtterances = queue.utterances.filter(u => u.status === 'pending');
+  debugLog(`[Hook] ${attemptedAction} - Found ${pendingUtterances.length} pending utterances`);
+
   if (pendingUtterances.length > 0) {
+    debugLog(`[Hook] ${attemptedAction} - Pending utterance IDs: ${pendingUtterances.map(u => u.id).join(', ')}`);
+    debugLog(`[Hook] ${attemptedAction} - Calling dequeueUtterancesCore()...`);
+
     // Always dequeue (dequeueUtterancesCore no longer requires voiceInputActive)
     const dequeueResult = dequeueUtterancesCore();
+
+    debugLog(`[Hook] ${attemptedAction} - Dequeue result: success=${dequeueResult.success}, count=${dequeueResult.utterances?.length || 0}`);
 
     if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
       // Reverse to show oldest first
       const reversedUtterances = dequeueResult.utterances.reverse();
 
+      debugLog(`[Hook] ${attemptedAction} - BLOCKING with ${reversedUtterances.length} utterances`);
       return {
         decision: 'block',
         reason: formatVoiceUtterances(reversedUtterances)
       };
+    } else {
+      debugLog(`[Hook] ${attemptedAction} - Dequeue failed or returned no utterances, continuing to next check`);
     }
+  } else {
+    debugLog(`[Hook] ${attemptedAction} - No pending utterances found, continuing to next check`);
   }
 
   // 2. Check for delivered utterances (when voice enabled)
   if (voiceResponsesEnabled) {
     const deliveredUtterances = queue.utterances.filter(u => u.status === 'delivered');
+    debugLog(`[Hook] ${attemptedAction} - Voice responses enabled, found ${deliveredUtterances.length} delivered utterances`);
+
     if (deliveredUtterances.length > 0) {
       // Only allow speak to proceed
       if (attemptedAction === 'speak') {
+        debugLog(`[Hook] ${attemptedAction} - Approving speak action despite delivered utterances`);
         return { decision: 'approve' };
       }
+      debugLog(`[Hook] ${attemptedAction} - BLOCKING due to unresponded delivered utterances`);
       return {
         decision: 'block',
         reason: `${deliveredUtterances.length} delivered utterance(s) require voice response. Please use the speak tool to respond before proceeding.`
@@ -470,9 +502,13 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
 
   // 5. Handle stop
   if (attemptedAction === 'stop') {
+    debugLog(`[Hook] stop - voiceInputActive=${voiceInputActive}, voiceResponsesEnabled=${voiceResponsesEnabled}`);
+    debugLog(`[Hook] stop - lastToolUseTimestamp=${lastToolUseTimestamp?.toISOString()}, lastSpeakTimestamp=${lastSpeakTimestamp?.toISOString()}`);
+
     // Check if must speak after tool use
     if (voiceResponsesEnabled && lastToolUseTimestamp &&
       (!lastSpeakTimestamp || lastSpeakTimestamp < lastToolUseTimestamp)) {
+      debugLog(`[Hook] stop - BLOCKING: must speak after tool use`);
       return {
         decision: 'block',
         reason: 'Assistant must speak after using tools. Please use the speak tool to respond before proceeding.'
@@ -481,6 +517,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
 
     // Auto-wait for utterances (only if voice input is active)
     if (voiceInputActive) {
+      debugLog(`[Hook] stop - Voice input active, starting async auto-wait...`);
       return (async () => {
         try {
           debugLog(`[Stop Hook] Auto-calling wait_for_utterance...`);
@@ -489,6 +526,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
 
           // If error (voice input not active), treat as no utterances found
           if (!data.success && data.error) {
+            debugLog(`[Stop Hook] Wait failed with error: ${data.error}`);
             return {
               decision: 'approve' as const,
               reason: data.error
@@ -497,6 +535,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
 
           // If utterances were found, block and return them
           if (data.utterances && data.utterances.length > 0) {
+            debugLog(`[Stop Hook] BLOCKING with ${data.utterances.length} utterances from wait`);
             return {
               decision: 'block' as const,
               reason: formatVoiceUtterances(data.utterances)
@@ -504,6 +543,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
           }
 
           // If no utterances found (including when voice was deactivated), approve stop
+          debugLog(`[Stop Hook] No utterances found during wait, approving stop`);
           return {
             decision: 'approve' as const,
             reason: data.message || 'No utterances found during wait'
@@ -519,6 +559,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
       })();
     }
 
+    debugLog(`[Hook] stop - Voice input not active, approving stop`);
     return {
       decision: 'approve',
       reason: 'No utterances since last timeout'
@@ -580,10 +621,11 @@ app.delete('/api/utterances', (_req: Request, res: Response) => {
   });
 });
 
-// Server-Sent Events for TTS notifications
-const ttsClients = new Set<Response>();
+// Server-Sent Events for real-time updates
+const sseClients = new Set<Response>();
 
-app.get('/api/tts-events', (_req: Request, res: Response) => {
+// Main SSE endpoint for all real-time updates
+app.get('/api/events', (_req: Request, res: Response) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -594,14 +636,15 @@ app.get('/api/tts-events', (_req: Request, res: Response) => {
   res.write('data: {"type":"connected"}\n\n');
 
   // Add client to set
-  ttsClients.add(res);
+  sseClients.add(res);
+  debugLog(`[SSE] Client connected, ${sseClients.size} total client(s)`);
 
   // Remove client on disconnect
   res.on('close', () => {
-    ttsClients.delete(res);
-    
+    sseClients.delete(res);
+
     // If no clients remain, disable voice features
-    if (ttsClients.size === 0) {
+    if (sseClients.size === 0) {
       debugLog('[SSE] Last browser disconnected, disabling voice features');
       if (voicePreferences.voiceInputActive || voicePreferences.voiceResponsesEnabled) {
         debugLog(`[SSE] Voice features disabled - Input: ${voicePreferences.voiceInputActive} -> false, Responses: ${voicePreferences.voiceResponsesEnabled} -> false`);
@@ -609,25 +652,93 @@ app.get('/api/tts-events', (_req: Request, res: Response) => {
         voicePreferences.voiceResponsesEnabled = false;
       }
     } else {
-      debugLog(`[SSE] Browser disconnected, ${ttsClients.size} client(s) remaining`);
+      debugLog(`[SSE] Browser disconnected, ${sseClients.size} client(s) remaining`);
     }
   });
 });
 
+// Backward compatibility: alias /api/tts-events to /api/events
+app.get('/api/tts-events', (_req: Request, res: Response) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  res.write('data: {"type":"connected"}\n\n');
+  sseClients.add(res);
+
+  res.on('close', () => {
+    sseClients.delete(res);
+
+    if (sseClients.size === 0) {
+      debugLog('[SSE] Last browser disconnected, disabling voice features');
+      if (voicePreferences.voiceInputActive || voicePreferences.voiceResponsesEnabled) {
+        debugLog(`[SSE] Voice features disabled - Input: ${voicePreferences.voiceInputActive} -> false, Responses: ${voicePreferences.voiceResponsesEnabled} -> false`);
+        voicePreferences.voiceInputActive = false;
+        voicePreferences.voiceResponsesEnabled = false;
+      }
+    } else {
+      debugLog(`[SSE] Browser disconnected, ${sseClients.size} client(s) remaining`);
+    }
+  });
+});
+
+// Helper function to broadcast SSE events to all connected clients
+function broadcastSSE(eventType: string, data: any) {
+  const message = JSON.stringify({ type: eventType, ...data });
+  sseClients.forEach(client => {
+    try {
+      client.write(`data: ${message}\n\n`);
+    } catch (error) {
+      debugLog(`[SSE] Error writing to client: ${error}`);
+    }
+  });
+  debugLog(`[SSE] Broadcasted ${eventType} to ${sseClients.size} client(s)`);
+}
+
 // Helper function to notify all connected TTS clients
 function notifyTTSClients(text: string) {
-  const message = JSON.stringify({ type: 'speak', text });
-  ttsClients.forEach(client => {
-    client.write(`data: ${message}\n\n`);
-  });
+  broadcastSSE('speak', { text });
 }
 
 // Helper function to notify all connected clients about wait status
 function notifyWaitStatus(isWaiting: boolean) {
-  const message = JSON.stringify({ type: 'waitStatus', isWaiting });
-  ttsClients.forEach(client => {
-    client.write(`data: ${message}\n\n`);
+  broadcastSSE('waitStatus', { isWaiting });
+}
+
+// Helper function to broadcast utterance added event
+function broadcastUtteranceAdded(utterance: Utterance) {
+  broadcastSSE('utterance-added', {
+    utterance: {
+      id: utterance.id,
+      text: utterance.text,
+      timestamp: utterance.timestamp,
+      status: utterance.status
+    }
   });
+}
+
+// Helper function to broadcast utterance status changed event
+function broadcastUtteranceStatusChanged(utterance: Utterance) {
+  broadcastSSE('utterance-status-changed', {
+    utterance: {
+      id: utterance.id,
+      text: utterance.text,
+      timestamp: utterance.timestamp,
+      status: utterance.status
+    }
+  });
+}
+
+// Helper function to broadcast utterance deleted event
+function broadcastUtteranceDeleted(id: string) {
+  broadcastSSE('utterance-deleted', { id });
+}
+
+// Helper function to broadcast queue cleared event
+function broadcastQueueCleared() {
+  broadcastSSE('queue-cleared', {});
 }
 
 // Helper function to format voice utterances for display
@@ -709,6 +820,9 @@ app.post('/api/speak', async (req: Request, res: Response) => {
       if (message) {
         message.status = 'responded';
       }
+
+      // Broadcast SSE event
+      broadcastUtteranceStatusChanged(u);
     });
 
     lastSpeakTimestamp = new Date();
@@ -788,7 +902,7 @@ app.listen(HTTP_PORT, async () => {
   const autoOpenBrowser = process.env.MCP_VOICE_HOOKS_AUTO_OPEN_BROWSER !== 'false'; // Default to true
   if (IS_MCP_MANAGED && autoOpenBrowser) {
     setTimeout(async () => {
-      if (ttsClients.size === 0) {
+      if (sseClients.size === 0) {
         debugLog('[Browser] No frontend connected, opening browser...');
         try {
           const open = (await import('open')).default;
@@ -798,7 +912,7 @@ app.listen(HTTP_PORT, async () => {
           debugLog('[Browser] Failed to open browser:', error);
         }
       } else {
-        debugLog(`[Browser] Frontend already connected (${ttsClients.size} client(s))`)
+        debugLog(`[Browser] Frontend already connected (${sseClients.size} client(s))`)
       }
     }, 3000);
   }
