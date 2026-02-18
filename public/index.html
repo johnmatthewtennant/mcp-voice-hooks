@@ -48,6 +48,34 @@
             letter-spacing: -1px;
         }
 
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .restart-btn {
+            background: #fff;
+            border: 2px solid #666;
+            border-radius: 4px;
+            padding: 6px 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            color: #666;
+        }
+
+        .restart-btn:hover {
+            background: #666;
+            color: #fff;
+        }
+
+        .restart-btn:active {
+            transform: scale(0.95);
+        }
+
         .legacy-link {
             color: #666;
             text-decoration: none;
@@ -59,6 +87,82 @@
 
         .legacy-link:hover {
             text-decoration: underline;
+        }
+
+        /* Instance Selector */
+        .instance-selector {
+            padding: 8px 16px;
+            background: #FAFAFA;
+            border-bottom: 1px solid #E0E0E0;
+        }
+
+        .instance-selector-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .instance-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        .instance-count {
+            font-size: 11px;
+            color: #999;
+        }
+
+        .instance-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .instance-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            padding: 8px 12px;
+            background: white;
+            border: 2px solid #E0E0E0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            min-width: 150px;
+            max-width: 300px;
+        }
+
+        .instance-btn:hover {
+            border-color: #007AFF;
+            background: #F8F9FA;
+        }
+
+        .instance-btn.targeted {
+            border-color: #007AFF;
+            background: #E3F2FD;
+        }
+
+        .instance-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 2px;
+        }
+
+        .instance-last-message {
+            font-size: 11px;
+            color: #666;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+
+        .instance-btn.targeted .instance-name {
+            color: #007AFF;
         }
 
         /* Main Content Area */
@@ -736,7 +840,25 @@
         <!-- Header -->
         <div class="app-header">
             <h1>Voice Mode for Claude Code</h1>
-            <a href="/legacy" class="legacy-link">Switch to Legacy UI</a>
+            <div class="header-actions">
+                <button id="restartBtn" class="restart-btn" title="Restart server">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                        <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                    </svg>
+                </button>
+                <a href="/legacy" class="legacy-link">Switch to Legacy UI</a>
+            </div>
+        </div>
+
+        <!-- Instance Selector -->
+        <div id="instanceSelector" class="instance-selector" style="display: none;">
+            <div class="instance-selector-header">
+                <span class="instance-label">Send to:</span>
+                <span class="instance-count" id="instanceCount"></span>
+            </div>
+            <div class="instance-list" id="instanceList">
+                <!-- Instance buttons will be inserted here -->
+            </div>
         </div>
 
         <!-- Main Content -->

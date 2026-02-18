@@ -1,12 +1,23 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c '{instanceId: .session_id, cwd: .cwd}' | curl -s -X POST -H 'Content-Type: application/json' -d @- \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/session-start\" || echo '{}'"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{}'"
+            "command": "jq -c '{instanceId: .session_id, cwd: .cwd}' | curl -s -X POST -H 'Content-Type: application/json' -d @- \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" || echo '{}'"
           }
         ]
       }
@@ -17,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-speak\" || echo '{}'"
+            "command": "jq -c '{instanceId: .session_id, cwd: .cwd}' | curl -s -X POST -H 'Content-Type: application/json' -d @- \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-speak\" || echo '{}'"
           }
         ]
       }
@@ -28,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/post-tool\" || echo '{}'"
+            "command": "jq -c '{instanceId: .session_id, cwd: .cwd}' | curl -s -X POST -H 'Content-Type: application/json' -d @- \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/post-tool\" || echo '{}'"
           }
         ]
       }

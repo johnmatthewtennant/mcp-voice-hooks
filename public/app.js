@@ -15,6 +15,17 @@ class MessengerClient {
         this.triggerWordInputContainer = document.getElementById('triggerWordInputContainer');
         this.triggerWordInput = document.getElementById('triggerWordInput');
 
+        // Instance selector elements
+        this.instanceSelector = document.getElementById('instanceSelector');
+        this.instanceList = document.getElementById('instanceList');
+        this.instanceCount = document.getElementById('instanceCount');
+
+        // Set up event delegation for instance list (prevents stale click handlers)
+        this.instanceList.addEventListener('click', (e) => this.handleInstanceListClick(e));
+
+        // Restart button
+        this.restartBtn = document.getElementById('restartBtn');
+
         // Settings
         this.settingsToggleHeader = document.getElementById('settingsToggleHeader');
         this.settingsContent = document.getElementById('settingsContent');
@@ -37,6 +48,8 @@ class MessengerClient {
         this.isInterimText = false;
         this.accumulatedText = ''; // For trigger word mode
         this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
+        this.instances = [];
+        this.targetInstanceId = null;
 
         // TTS state
         this.voices = [];
@@ -115,6 +128,16 @@ class MessengerClient {
                     this.speakText(data.text);
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
+                } else if (data.type === 'targetChanged' || data.type === 'instancesChanged') {
+                    // Update instances when target changes or new instance registers
+                    this.targetInstanceId = data.targetInstanceId;
+                    if (data.instances) {
+                        this.instances = data.instances;
+                        this.instances.forEach(inst => {
+                            inst.isTargeted = inst.id === this.targetInstanceId;
+                        });
+                    }
+                    this.renderInstances();
                 }
             } catch (error) {
                 console.error('Failed to parse TTS event:', error);
@@ -340,7 +363,13 @@ class MessengerClient {
     setupEventListeners() {
         // Text input events
         this.messageInput.addEventListener('keydown', (e) => this.handleTextInputKeydown(e));
-        this.messageInput.addEventListener('input', () => this.autoGrowTextarea());
+        this.messageInput.addEventListener('input', () => {
+            this.autoGrowTextarea();
+            // Sync accumulatedText with manual edits (prevents restoring deleted text)
+            if (!this.isInterimText) {
+                this.accumulatedText = this.messageInput.value;
+            }
+        });
 
         // Microphone button
         this.micBtn.addEventListener('click', () => this.toggleVoiceDictation());
@@ -422,6 +451,39 @@ class MessengerClient {
                 this.speakText('This is Voice Mode for Claude Code. How can I help you today?');
             });
         }
+
+        // Restart button
+        if (this.restartBtn) {
+            this.restartBtn.addEventListener('click', () => this.restartServer());
+        }
+    }
+
+    async restartServer() {
+        if (!confirm('Restart the voice hooks server?')) return;
+
+        try {
+            const response = await fetch(`${this.baseUrl}/api/restart`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                // Server will restart, page will lose connection
+                // Show a message and attempt to reconnect
+                document.body.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 16px;"><h2>Server restarting...</h2><p>Reconnecting in a moment...</p></div>';
+
+                // Try to reconnect after a delay
+                setTimeout(() => {
+                    window.location.reload();
+                }, 2000);
+            }
+        } catch (error) {
+            // Connection lost means server is restarting
+            document.body.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; flex-direction: column; gap: 16px;"><h2>Server restarting...</h2><p>Reconnecting in a moment...</p></div>';
+
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        }
     }
 
     async loadData() {
@@ -432,8 +494,136 @@ class MessengerClient {
                 const data = await conversationResponse.json();
                 this.updateConversation(data.messages);
             }
+
+            // Load instances
+            await this.loadInstances();
         } catch (error) {
             console.error('Failed to load data:', error);
+        }
+    }
+
+    async loadInstances() {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/instances`);
+            if (response.ok) {
+                const data = await response.json();
+                this.instances = data.instances || [];
+                this.targetInstanceId = data.targetInstanceId;
+                this.renderInstances();
+            }
+        } catch (error) {
+            console.error('Failed to load instances:', error);
+        }
+    }
+
+    // Event delegation handler for instance list clicks
+    handleInstanceListClick(e) {
+        // Check if clicking a close button
+        const closeBtn = e.target.closest('.instance-close-btn');
+        if (closeBtn) {
+            e.stopPropagation();
+            const instanceBtn = closeBtn.closest('.instance-btn');
+            if (instanceBtn) {
+                const instanceId = instanceBtn.dataset.instanceId;
+                const instanceName = instanceBtn.dataset.instanceName;
+                this.removeInstance(instanceId, instanceName);
+            }
+            return;
+        }
+
+        // Check if clicking an instance button (to target it)
+        const instanceBtn = e.target.closest('.instance-btn');
+        if (instanceBtn) {
+            const instanceId = instanceBtn.dataset.instanceId;
+            this.targetInstance(instanceId);
+        }
+    }
+
+    renderInstances() {
+        // Show/hide selector based on instance count
+        if (this.instances.length === 0) {
+            this.instanceSelector.style.display = 'none';
+            return;
+        }
+
+        this.instanceSelector.style.display = 'block';
+        this.instanceCount.textContent = this.instances.length === 1
+            ? '(1 instance)'
+            : `(${this.instances.length} instances)`;
+
+        // Clear and rebuild instance list
+        this.instanceList.innerHTML = '';
+
+        this.instances.forEach(instance => {
+            const btn = document.createElement('div');
+            btn.className = `instance-btn ${instance.isTargeted ? 'targeted' : ''}`;
+            // Store instance data on the element for event delegation
+            btn.dataset.instanceId = instance.id;
+            btn.dataset.instanceName = instance.name || 'Unknown';
+
+            const header = document.createElement('div');
+            header.className = 'instance-header';
+            header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; width: 100%;';
+
+            const name = document.createElement('div');
+            name.className = 'instance-name';
+            name.textContent = instance.name || 'Unknown';
+
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'instance-close-btn';
+            closeBtn.innerHTML = '×';
+            closeBtn.title = 'Remove instance';
+            closeBtn.style.cssText = 'background: none; border: none; font-size: 18px; cursor: pointer; color: #999; padding: 0 4px; line-height: 1;';
+            closeBtn.onmouseover = () => closeBtn.style.color = '#EF5350';
+            closeBtn.onmouseout = () => closeBtn.style.color = '#999';
+
+            header.appendChild(name);
+            header.appendChild(closeBtn);
+
+            const lastActivity = document.createElement('div');
+            lastActivity.className = 'instance-last-message';
+            lastActivity.textContent = `Active ${this.formatRelativeTime(instance.lastSeen)}`;
+
+            btn.appendChild(header);
+            btn.appendChild(lastActivity);
+            this.instanceList.appendChild(btn);
+        });
+    }
+
+    async removeInstance(instanceId, instanceName) {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/instances/${instanceId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                // Remove from local list
+                this.instances = this.instances.filter(inst => inst.id !== instanceId);
+                this.renderInstances();
+            }
+        } catch (error) {
+            console.error('Failed to remove instance:', error);
+        }
+    }
+
+    async targetInstance(instanceId) {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/instances/target`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ instanceId })
+            });
+
+            if (response.ok) {
+                this.targetInstanceId = instanceId;
+                // Update UI immediately
+                this.instances.forEach(inst => {
+                    inst.isTargeted = inst.id === instanceId;
+                });
+                this.renderInstances();
+            }
+        } catch (error) {
+            console.error('Failed to target instance:', error);
         }
     }
 
@@ -566,6 +756,20 @@ class MessengerClient {
     formatTimestamp(timestamp) {
         const date = new Date(timestamp);
         return date.toLocaleTimeString();
+    }
+
+    formatRelativeTime(timestamp) {
+        const now = new Date();
+        const then = new Date(timestamp);
+        const diffMs = now - then;
+        const diffSec = Math.floor(diffMs / 1000);
+        
+        if (diffSec < 5) return 'just now';
+        if (diffSec < 60) return `${diffSec}s ago`;
+        const diffMin = Math.floor(diffSec / 60);
+        if (diffMin < 60) return `${diffMin}m ago`;
+        const diffHr = Math.floor(diffMin / 60);
+        return `${diffHr}h ago`;
     }
 
     // Text input handling
