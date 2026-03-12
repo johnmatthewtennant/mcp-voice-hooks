@@ -529,21 +529,38 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   return { decision: 'approve' };
 }
 
+// Helper: check if hook request is from a sub-agent
+function isSubagentRequest(req: Request): boolean {
+  const agentId = req.body?.agent_id;
+  if (agentId) {
+    debugLog(`[Hooks] Sub-agent detected: agent_id=${agentId} agent_type=${req.body?.agent_type} — skipping voice routing`);
+    return true;
+  }
+  return false;
+}
+
+const SUBAGENT_APPROVE = { decision: 'approve' as const };
+
 // Dedicated hook endpoints that return in Claude's expected format
-app.post('/api/hooks/stop', async (_req: Request, res: Response) => {
+app.post('/api/hooks/stop', async (req: Request, res: Response) => {
+  if (isSubagentRequest(req)) return res.json(SUBAGENT_APPROVE);
   const result = await handleHookRequest('stop');
   res.json(result);
 });
 
-// Pre-speak hook endpoint
-app.post('/api/hooks/pre-speak', (_req: Request, res: Response) => {
+// Pre-speak hook endpoint — blocks sub-agents from using speak
+app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
+  if (isSubagentRequest(req)) {
+    debugLog(`[Hooks] Blocking speak for sub-agent: ${req.body?.agent_type}`);
+    return res.json({ decision: 'block', reason: 'Voice responses are not available for sub-agents. Communicate via text output instead.' });
+  }
   const result = handleHookRequest('speak');
   res.json(result);
 });
 
 // Post-tool hook endpoint
-app.post('/api/hooks/post-tool', (_req: Request, res: Response) => {
-  // Use the unified handler with 'post-tool' action
+app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
+  if (isSubagentRequest(req)) return res.json(SUBAGENT_APPROVE);
   const result = handleHookRequest('post-tool');
   res.json(result);
 });
