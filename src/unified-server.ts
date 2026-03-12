@@ -787,8 +787,8 @@ app.get('/messenger', (_req: Request, res: Response) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
-// Start HTTP server
-app.listen(HTTP_PORT, async () => {
+// Start HTTP server with EADDRINUSE handling for multi-session support
+const httpServer = app.listen(HTTP_PORT, async () => {
   // Log startup info with git hash and timestamp to file for debugging
   const { execSync } = await import('child_process');
   let gitHash = 'unknown';
@@ -822,6 +822,19 @@ app.listen(HTTP_PORT, async () => {
         debugLog(`[Browser] Frontend already connected (${ttsClients.size} client(s))`)
       }
     }, 3000);
+  }
+});
+
+// Handle EADDRINUSE: another instance already owns the HTTP server.
+// This process will run as MCP shim only, proxying speak calls to the existing server.
+httpServer.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    const log = IS_MCP_MANAGED ? console.error : console.log;
+    log(`[HTTP] Port ${HTTP_PORT} already in use — another instance owns the HTTP server`);
+    log(`[HTTP] Running as MCP shim only, proxying to http://localhost:${HTTP_PORT}`);
+  } else {
+    // Re-throw unexpected errors
+    throw err;
   }
 });
 
