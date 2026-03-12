@@ -188,7 +188,7 @@ function getOrCreateSession(key: string, sessionId?: string, agentId?: string | 
       lastActivity: new Date(),
     };
     sessions.set(key, session);
-    debugLog(`[Session] Created new session: key=${key} sessionId=${sessionId || 'default'} agentId=${agentId || 'main'} agentType=${agentType || 'none'}`);
+    debugLog(`[Session] Created: key=${key} session=${sessionId || 'default'} agent=${agentId || 'main'} type=${agentType || 'none'}`);
   }
   session.lastActivity = new Date();
   return session;
@@ -213,7 +213,7 @@ function cleanupSessions(): void {
       sessions.delete(key);
       const wasActive = key === activeCompositeKey;
       if (wasActive) activeCompositeKey = null;
-      debugLog(`[Session] Expired inactive session: ${key} (sessionId=${session.sessionId} agentId=${session.agentId || 'main'} wasActive=${wasActive} utterances=${session.queue.utterances.length})`);
+      debugLog(`[Session] TTL cleanup: key=${key} lastActivity=${session.lastActivity.toISOString()}`);
     }
   }
 }
@@ -228,7 +228,7 @@ const speakWhitelist = new Map<string, { count: number; expiry: number }>();
 
 const WHITELIST_TTL_MS = 5000; // 5 second TTL for whitelist entries
 
-function addToWhitelist(text: string): void {
+function addToWhitelist(text: string, key?: string): void {
   const existing = speakWhitelist.get(text);
   const expiry = Date.now() + WHITELIST_TTL_MS;
   if (existing) {
@@ -237,7 +237,7 @@ function addToWhitelist(text: string): void {
   } else {
     speakWhitelist.set(text, { count: 1, expiry });
   }
-  debugLog(`[Whitelist] Added "${text.substring(0, 50)}..." count=${speakWhitelist.get(text)!.count}`);
+  debugLog(`[Whitelist] Added: key=${key || 'unknown'} text="${text.slice(0, 30)}..." count=${speakWhitelist.get(text)!.count}`);
 }
 
 function checkWhitelist(text: string): boolean {
@@ -248,10 +248,10 @@ function checkWhitelist(text: string): boolean {
     if (entry.count === 0) {
       speakWhitelist.delete(text);
     }
-    debugLog(`[Whitelist] Consumed "${text.substring(0, 50)}..." remaining=${entry.count}`);
+    debugLog(`[Speak] Whitelist match: text="${text.slice(0, 30)}..." remaining=${entry.count}`);
     return true;
   }
-  debugLog(`[Whitelist] Rejected "${text.substring(0, 50)}..." — not in whitelist`);
+  debugLog(`[Speak] Whitelist miss: text="${text.slice(0, 30)}..."`);
   return false;
 }
 
@@ -670,7 +670,7 @@ function isActiveKey(key: string): boolean {
 function registerIfFirst(key: string): void {
   if (activeCompositeKey === null) {
     activeCompositeKey = key;
-    debugLog(`[Session] First session registered as active: ${key}`);
+    debugLog(`[Session] Active changed: ${null} → ${key}`);
   }
 }
 
@@ -681,7 +681,7 @@ function logHookRequest(req: Request, endpoint: string): void {
   const key = compositeKey(sessionId, agentId);
   const toolName = req.body?.tool_name;
   const active = isActiveKey(key) ? 'active' : 'inactive';
-  debugLog(`[Hook] ${endpoint}: tool=${toolName || 'n/a'} session=${sessionId} agent=${agentId || 'main'} key=${key} (${active})`);
+  debugLog(`[Hook] ${endpoint}: key=${key} active=${active === 'active'} tool=${toolName || 'n/a'}`);
 }
 
 // Dedicated hook endpoints that return in Claude's expected format
@@ -692,7 +692,7 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
 
   // Only route voice for active session
   if (!isActiveKey(key)) {
-    debugLog(`[Hook] stop: inactive session ${key}, approving immediately`);
+    debugLog(`[Hook] stop: key=${key} active=false (instant approve)`);
     res.json({ decision: 'approve' });
     return;
   }
@@ -714,8 +714,7 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
     const result = handleHookRequest('speak', session);
     // If approved and we have text, add to whitelist
     if (speakText && (result as any).decision !== 'block') {
-      addToWhitelist(speakText);
-      debugLog(`[Hook] pre-speak: active session ${key}, whitelisted text="${speakText.substring(0, 50)}..."`);
+      addToWhitelist(speakText, key);
     }
     res.json(result);
     return;
@@ -724,7 +723,7 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
   // Inactive session: store in that session's conversation history, block the speak
   if (speakText) {
     session.queue.addAssistantMessage(speakText);
-    debugLog(`[Hook] pre-speak: inactive session ${key}, stored text in history, blocking speak`);
+    debugLog(`[Whitelist] Rejected (inactive): key=${key} text="${speakText.slice(0, 30)}..."`);
   }
   res.json({
     decision: 'block',
@@ -740,7 +739,7 @@ app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
 
   // Only route voice for active session
   if (!isActiveKey(key)) {
-    debugLog(`[Hook] post-tool: inactive session ${key}, approving immediately`);
+    debugLog(`[Hook] post-tool: key=${key} active=false (instant approve)`);
     res.json({ decision: 'approve' });
     return;
   }
@@ -801,7 +800,7 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
 
   // Add client to map
   ttsClients.set(res, sessionKey);
-  debugLog(`[SSE] Browser connected, watching session=${sessionKey || 'active'}, ${ttsClients.size} client(s) total`);
+  debugLog(`[SSE] Client connected: session=${sessionKey || 'active'}`);
 
   // Remove client on disconnect
   res.on('close', () => {
@@ -810,14 +809,14 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
 
     // If no clients remain, disable voice features
     if (ttsClients.size === 0) {
-      debugLog(`[SSE] Last browser disconnected (was watching session=${disconnectedSessionKey || 'active'}), disabling voice features`);
+      debugLog(`[SSE] Client disconnected: session=${disconnectedSessionKey || 'active'} (last client, disabling voice)`);
       if (voicePreferences.voiceInputActive || voicePreferences.voiceResponsesEnabled) {
         debugLog(`[SSE] Voice features disabled - Input: ${voicePreferences.voiceInputActive} -> false, Responses: ${voicePreferences.voiceResponsesEnabled} -> false`);
         voicePreferences.voiceInputActive = false;
         voicePreferences.voiceResponsesEnabled = false;
       }
     } else {
-      debugLog(`[SSE] Browser disconnected (was watching session=${disconnectedSessionKey || 'active'}), ${ttsClients.size} client(s) remaining`);
+      debugLog(`[SSE] Client disconnected: session=${disconnectedSessionKey || 'active'}`);
     }
   });
 });
@@ -911,7 +910,7 @@ app.post('/api/active-session', (req: Request, res: Response) => {
 
   const previousKey = activeCompositeKey;
   activeCompositeKey = key;
-  debugLog(`[Session] Active session switched: ${previousKey} → ${key}`);
+  debugLog(`[Session] Active changed: ${previousKey} → ${key}`);
 
   res.json({
     success: true,
@@ -941,7 +940,7 @@ app.post('/api/speak', async (req: Request, res: Response) => {
   // Check whitelist: only speak if text was approved by pre-speak hook
   // Skip whitelist check if no multi-session is active (single session backward compat)
   if (activeCompositeKey !== null && !checkWhitelist(text)) {
-    debugLog(`[Speak] Text not in whitelist, rejecting: "${text.substring(0, 50)}..."`);
+    // checkWhitelist already logged the miss
     res.status(403).json({
       error: 'Speak not authorized',
       message: 'This text was not approved by the pre-speak hook for the active session'
