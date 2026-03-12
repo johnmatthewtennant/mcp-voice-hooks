@@ -117,6 +117,8 @@ interface VoicePreferences {
   voiceInputActive: boolean;
 }
 
+// Background voice enforcement: when enabled, inactive sessions must speak after tool use
+
 // Per-session state (mirrors unified-server.ts)
 interface SessionState {
   key: string;
@@ -150,6 +152,7 @@ export class TestServer {
   public activeCompositeKey: string | null = null;
   public speakWhitelist = new Map<string, { count: number; expiry: number; sessionKey: string }>();
   private whitelistTTL = 5000;
+  public backgroundVoiceEnforcement = false;
 
   constructor() {
     this.app = express();
@@ -529,6 +532,18 @@ export class TestServer {
       res.json({ success: true });
     });
 
+    // POST /api/background-voice-enforcement
+    this.app.post('/api/background-voice-enforcement', (req, res) => {
+      const { enabled } = req.body;
+      this.backgroundVoiceEnforcement = !!enabled;
+      res.json({ success: true, enabled: this.backgroundVoiceEnforcement });
+    });
+
+    // GET /api/background-voice-enforcement
+    this.app.get('/api/background-voice-enforcement', (_req, res) => {
+      res.json({ enabled: this.backgroundVoiceEnforcement });
+    });
+
     // DELETE /api/utterances
     this.app.delete('/api/utterances', (_req, res) => {
       const session = this.getActiveSessionOrFirst();
@@ -651,9 +666,10 @@ export class TestServer {
       this.registerIfFirst(key);
       const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
 
-      // Inactive session: enforce "must speak after tool use" but skip voice input routing
+      // Inactive session: enforce "must speak after tool use" when enforcement is on OR voice responses enabled
       if (!this.isActiveKey(key)) {
-        if (this.voicePreferences.voiceResponsesEnabled && session.lastToolUseTimestamp &&
+        const enforceSpeak = this.backgroundVoiceEnforcement || this.voicePreferences.voiceResponsesEnabled;
+        if (enforceSpeak && session.lastToolUseTimestamp &&
           (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
           res.json({
             decision: 'block',
@@ -826,5 +842,6 @@ export class TestServer {
     };
     this.activeCompositeKey = null;
     this.speakWhitelist.clear();
+    this.backgroundVoiceEnforcement = false;
   }
 }

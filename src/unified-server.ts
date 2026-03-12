@@ -152,6 +152,11 @@ let voicePreferences = {
   voiceInputActive: false
 };
 
+// Background voice enforcement: when enabled, inactive sessions get
+// voiceResponsesEnabled=true and voiceInputActive=false in hook responses,
+// forcing them to call the speak tool (which stores text in conversation history).
+let backgroundVoiceEnforcement = false;
+
 // Multi-session state
 // Composite key encoding: JSON.stringify([sessionId, agentId || "main"])
 function compositeKey(sessionId: string, agentId?: string | null): string {
@@ -718,9 +723,10 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   const { key, session } = parseHookRequest(req);
   registerIfFirst(key);
 
-  // Inactive session: enforce "must speak after tool use" but skip voice input routing
+  // Inactive session: enforce "must speak after tool use" when background enforcement is on OR voice responses are enabled
   if (!isActiveKey(key)) {
-    if (voicePreferences.voiceResponsesEnabled && session.lastToolUseTimestamp &&
+    const enforceSpeak = backgroundVoiceEnforcement || voicePreferences.voiceResponsesEnabled;
+    if (enforceSpeak && session.lastToolUseTimestamp &&
       (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
       res.json({
         decision: 'block',
@@ -917,6 +923,18 @@ app.post('/api/voice-input-state', (req: Request, res: Response) => {
     success: true,
     voiceInputActive: voicePreferences.voiceInputActive
   });
+});
+
+// API for background voice enforcement
+app.post('/api/background-voice-enforcement', (req: Request, res: Response) => {
+  const { enabled } = req.body;
+  backgroundVoiceEnforcement = !!enabled;
+  debugLog(`[Background Voice Enforcement] ${backgroundVoiceEnforcement ? 'Enabled' : 'Disabled'}`);
+  res.json({ success: true, enabled: backgroundVoiceEnforcement });
+});
+
+app.get('/api/background-voice-enforcement', (_req: Request, res: Response) => {
+  res.json({ enabled: backgroundVoiceEnforcement });
 });
 
 // API for session management

@@ -35,6 +35,7 @@ class MessengerClient {
         this.sessionList = document.getElementById('sessionList');
         this.sidebarOpenBtn = document.getElementById('sidebarOpenBtn');
         this.sidebarCloseBtn = document.getElementById('sidebarCloseBtn');
+        this.backgroundEnforcementToggle = document.getElementById('backgroundEnforcementToggle');
 
         // State
         this.sendMode = 'automatic'; // 'automatic' or 'trigger'
@@ -166,6 +167,22 @@ class MessengerClient {
                 if (key && key !== this.activeSessionKey) {
                     this.switchActiveSession(key);
                 }
+            });
+        }
+        // Background enforcement toggle
+        if (this.backgroundEnforcementToggle) {
+            // Load saved preference from localStorage, then sync with server
+            const saved = localStorage.getItem('backgroundVoiceEnforcement');
+            if (saved !== null) {
+                this.backgroundEnforcementToggle.checked = saved === 'true';
+                this.updateBackgroundEnforcement(saved === 'true');
+            } else {
+                // Load from server on first visit
+                this.loadBackgroundEnforcement();
+            }
+            this.backgroundEnforcementToggle.addEventListener('change', (e) => {
+                const enabled = e.target.checked;
+                this.updateBackgroundEnforcement(enabled);
             });
         }
         // Load sessions immediately
@@ -1010,6 +1027,34 @@ class MessengerClient {
             });
         } catch (error) {
             console.error('Failed to update voice responses:', error);
+        }
+    }
+
+    async loadBackgroundEnforcement() {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/background-voice-enforcement`);
+            if (response.ok) {
+                const data = await response.json();
+                if (this.backgroundEnforcementToggle) {
+                    this.backgroundEnforcementToggle.checked = data.enabled;
+                }
+                localStorage.setItem('backgroundVoiceEnforcement', data.enabled.toString());
+            }
+        } catch (error) {
+            this.debugLog('Failed to load background enforcement:', error);
+        }
+    }
+
+    async updateBackgroundEnforcement(enabled) {
+        try {
+            localStorage.setItem('backgroundVoiceEnforcement', enabled.toString());
+            await fetch(`${this.baseUrl}/api/background-voice-enforcement`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled })
+            });
+        } catch (error) {
+            console.error('Failed to update background enforcement:', error);
         }
     }
 }
