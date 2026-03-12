@@ -25,26 +25,18 @@ For plugin development, use the dev marketplace instead of the production one. T
 
 ### How the plugin works
 
-The plugin has two separate systems with different update paths:
+The plugin has two parts:
 
-1. **Hooks** — Defined in `plugin/hooks/hooks.json`. These are copied to `~/.claude/plugins/cache/mcp-voice-hooks-dev-marketplace/` and loaded at Claude Code session start. Changes to hooks.json are synced to the cache automatically but require a Claude Code restart to take effect (hooks are captured at startup).
+1. **Hooks** — Defined in `plugin/hooks/hooks.json`. Synced to the plugin cache at `~/.claude/plugins/cache/` and loaded at Claude Code session start. Changes require a restart.
 
-2. **Server** — The MCP server binary at `dist/unified-server.js`. The plugin launches the server via `npx mcp-voice-hooks`, which uses the **npx cache** (`~/.npm/_npx/`), NOT your local build. `npm link` alone may not be enough since npx has its own resolution.
+2. **Server** — `dist/unified-server.js`, launched via `npx mcp-voice-hooks`. After `npm link`, npx resolves to your local build.
 
 ### Setting up the dev plugin
 
-Add to your `~/.claude/settings.json`:
+The dev marketplace is already defined in the repo at `dev-marketplace/`. Enable the dev plugin in any Claude Code settings file (`~/.claude/settings.json`, `.claude/settings.json`, or `.claude/settings.local.json`):
 
 ```json
 {
-  "extraKnownMarketplaces": {
-    "mcp-voice-hooks-dev-marketplace": {
-      "source": {
-        "source": "local",
-        "path": "/path/to/your/mcp-voice-hooks"
-      }
-    }
-  },
   "enabledPlugins": {
     "mcp-voice-hooks-dev-plugin@mcp-voice-hooks-dev-marketplace": true,
     "mcp-voice-hooks-plugin@mcp-voice-hooks-marketplace": false
@@ -56,7 +48,7 @@ Disable the production plugin when using the dev one.
 
 ### Running your local server code
 
-After `npm link`, the global `mcp-voice-hooks` command points to your local repo. Restart Claude Code after building to run your local server code.
+`npm link` (from the setup step) makes npx resolve `mcp-voice-hooks` to your local repo. After building, restart Claude Code to run your local server code.
 
 ### Verifying your local code is running
 
