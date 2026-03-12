@@ -195,13 +195,28 @@ function getOrCreateSession(key: string, sessionId?: string, agentId?: string | 
   return session;
 }
 
-function getActiveSession(): SessionState {
+function getActiveSession(): SessionState | null {
   if (activeCompositeKey) {
     const session = sessions.get(activeCompositeKey);
     if (session) return session;
   }
-  // Fallback: create/get default session without setting activeCompositeKey
-  // (only hook endpoints should set activeCompositeKey via registerIfFirst)
+  // No active session set — only return default if no real sessions exist
+  const hasRealSessions = Array.from(sessions.values()).some(s => s.sessionId !== 'default');
+  if (!hasRealSessions) {
+    const defaultKey = compositeKey('default');
+    return getOrCreateSession(defaultKey);
+  }
+  return null;
+}
+
+// Get active session or return a 404-like response for browser endpoints
+function getActiveSessionOrFirst(): SessionState {
+  const active = getActiveSession();
+  if (active) return active;
+  // If there are real sessions but none is active, return the first one
+  const first = sessions.values().next().value;
+  if (first) return first;
+  // Truly empty — create default
   const defaultKey = compositeKey('default');
   return getOrCreateSession(defaultKey);
 }
@@ -225,35 +240,37 @@ setInterval(cleanupSessions, 5 * 60 * 1000);
 // Pre-speak text whitelist: text → { count, expiry }
 // Global because MCP speak calls arrive without session identity.
 // The pre-speak hook (which has identity) bridges this gap.
-const speakWhitelist = new Map<string, { count: number; expiry: number }>();
+const speakWhitelist = new Map<string, { count: number; expiry: number; sessionKey: string }>();
 
 const WHITELIST_TTL_MS = 5000; // 5 second TTL for whitelist entries
 
-function addToWhitelist(text: string, key?: string): void {
+function addToWhitelist(text: string, sessionKey: string): void {
   const existing = speakWhitelist.get(text);
   const expiry = Date.now() + WHITELIST_TTL_MS;
   if (existing) {
     existing.count++;
     existing.expiry = expiry;
+    existing.sessionKey = sessionKey; // Update to latest session
   } else {
-    speakWhitelist.set(text, { count: 1, expiry });
+    speakWhitelist.set(text, { count: 1, expiry, sessionKey });
   }
-  debugLog(`[Whitelist] Added: key=${key || 'unknown'} text="${text.slice(0, 30)}..." count=${speakWhitelist.get(text)!.count}`);
+  debugLog(`[Whitelist] Added: key=${sessionKey} text="${text.slice(0, 30)}..." count=${speakWhitelist.get(text)!.count}`);
 }
 
-function checkWhitelist(text: string): boolean {
+function checkWhitelist(text: string): { matched: boolean; sessionKey?: string } {
   cleanupWhitelist();
   const entry = speakWhitelist.get(text);
   if (entry && entry.count > 0) {
+    const sessionKey = entry.sessionKey;
     entry.count--;
     if (entry.count === 0) {
       speakWhitelist.delete(text);
     }
-    debugLog(`[Speak] Whitelist match: text="${text.slice(0, 30)}..." remaining=${entry.count}`);
-    return true;
+    debugLog(`[Speak] Whitelist match: text="${text.slice(0, 30)}..." sessionKey=${sessionKey} remaining=${entry.count}`);
+    return { matched: true, sessionKey };
   }
   debugLog(`[Speak] Whitelist miss: text="${text.slice(0, 30)}..."`);
-  return false;
+  return { matched: false };
 }
 
 function cleanupWhitelist(): void {
@@ -284,7 +301,7 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
     return;
   }
 
-  const session = getActiveSession();
+  const session = getActiveSessionOrFirst();
   const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
   const utterance = session.queue.add(text, parsedTimestamp);
   res.json({
@@ -300,7 +317,7 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
 
 app.get('/api/utterances', (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 10;
-  const session = getActiveSession();
+  const session = getActiveSessionOrFirst();
   const utterances = session.queue.getRecent(limit);
 
   res.json({
@@ -316,7 +333,7 @@ app.get('/api/utterances', (req: Request, res: Response) => {
 // GET /api/conversation - Returns full conversation history
 app.get('/api/conversation', (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 50;
-  const session = getActiveSession();
+  const session = getActiveSessionOrFirst();
   const messages = session.queue.getRecentMessages(limit);
 
   res.json({
@@ -331,7 +348,7 @@ app.get('/api/conversation', (req: Request, res: Response) => {
 });
 
 app.get('/api/utterances/status', (_req: Request, res: Response) => {
-  const session = getActiveSession();
+  const session = getActiveSessionOrFirst();
   const total = session.queue.utterances.length;
   const pending = session.queue.utterances.filter(u => u.status === 'pending').length;
   const delivered = session.queue.utterances.filter(u => u.status === 'delivered').length;
@@ -345,7 +362,7 @@ app.get('/api/utterances/status', (_req: Request, res: Response) => {
 
 // Shared dequeue logic
 function dequeueUtterancesCore(session?: SessionState) {
-  const s = session || getActiveSession();
+  const s = session || getActiveSessionOrFirst();
   // Always dequeue pending utterances regardless of voiceInputActive
   // This allows both typed and spoken messages to be dequeued
   const pendingUtterances = s.queue.utterances
@@ -374,7 +391,7 @@ app.post('/api/dequeue-utterances', (_req: Request, res: Response) => {
 
 // Shared wait for utterance logic
 async function waitForUtteranceCore(session?: SessionState) {
-  const s = session || getActiveSession();
+  const s = session || getActiveSessionOrFirst();
 
   // Check if voice input is active
   if (!voicePreferences.voiceInputActive) {
@@ -475,7 +492,7 @@ app.post('/api/wait-for-utterances', async (_req: Request, res: Response) => {
 
 // API for pre-tool hook to check for pending utterances
 app.get('/api/has-pending-utterances', (_req: Request, res: Response) => {
-  const session = getActiveSession();
+  const session = getActiveSessionOrFirst();
   const pendingCount = session.queue.utterances.filter(u => u.status === 'pending').length;
   const hasPending = pendingCount > 0;
 
@@ -489,7 +506,7 @@ app.get('/api/has-pending-utterances', (_req: Request, res: Response) => {
 app.post('/api/validate-action', (req: Request, res: Response) => {
   const { action } = req.body;
   const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
-  const session = getActiveSession();
+  const session = getActiveSessionOrFirst();
 
   if (!action || !['tool-use', 'stop'].includes(action)) {
     res.status(400).json({ error: 'Invalid action. Must be "tool-use" or "stop"' });
@@ -542,7 +559,7 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 
 // Unified hook handler
 function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool', session?: SessionState): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
-  const s = session || getActiveSession();
+  const s = session || getActiveSessionOrFirst();
   const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
   const voiceInputActive = voicePreferences.voiceInputActive;
 
@@ -672,6 +689,16 @@ function registerIfFirst(key: string): void {
   if (activeCompositeKey === null) {
     activeCompositeKey = key;
     debugLog(`[Session] Active changed: ${null} → ${key}`);
+  } else {
+    // If the current active is a default session and this is a real session, upgrade
+    const currentActive = sessions.get(activeCompositeKey);
+    if (currentActive && currentActive.sessionId === 'default') {
+      const parsed = JSON.parse(key) as [string, string];
+      if (parsed[0] !== 'default') {
+        activeCompositeKey = key;
+        debugLog(`[Session] Active upgraded from default → ${key}`);
+      }
+    }
   }
 }
 
@@ -763,7 +790,7 @@ app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
 // Delete specific utterance by ID
 app.delete('/api/utterances/:id', (req: Request, res: Response) => {
   const { id } = req.params;
-  const session = getActiveSession();
+  const session = getActiveSessionOrFirst();
   const deleted = session.queue.delete(id);
 
   if (deleted) {
@@ -781,7 +808,7 @@ app.delete('/api/utterances/:id', (req: Request, res: Response) => {
 
 // Delete all utterances
 app.delete('/api/utterances', (_req: Request, res: Response) => {
-  const session = getActiveSession();
+  const session = getActiveSessionOrFirst();
   const clearedCount = session.queue.utterances.length;
   session.queue.clear();
 
@@ -951,17 +978,25 @@ app.post('/api/speak', async (req: Request, res: Response) => {
 
   // Check whitelist: only speak if text was approved by pre-speak hook
   // Skip whitelist check if no multi-session is active (single session backward compat)
-  if (activeCompositeKey !== null && !checkWhitelist(text)) {
-    // checkWhitelist already logged the miss
-    res.status(403).json({
-      error: 'Speak not authorized',
-      message: 'This text was not approved by the pre-speak hook for the active session'
-    });
-    return;
+  let whitelistSessionKey: string | undefined;
+  if (activeCompositeKey !== null) {
+    const whitelistResult = checkWhitelist(text);
+    if (!whitelistResult.matched) {
+      res.status(403).json({
+        error: 'Speak not authorized',
+        message: 'This text was not approved by the pre-speak hook for the active session'
+      });
+      return;
+    }
+    whitelistSessionKey = whitelistResult.sessionKey;
   }
 
   try {
-    const session = getActiveSession();
+    // Use the session from the whitelist entry (the session that pre-speak approved),
+    // falling back to the active session for single-session backward compat
+    const session = whitelistSessionKey
+      ? (sessions.get(whitelistSessionKey) || getActiveSessionOrFirst())
+      : getActiveSessionOrFirst();
 
     // Always notify browser clients - they decide how to speak
     notifyTTSClients(text);

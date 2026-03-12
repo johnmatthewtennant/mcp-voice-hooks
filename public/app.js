@@ -261,7 +261,7 @@ class MessengerClient {
                 if (isActive) classes.push('active');
                 if (isSubAgent) classes.push('sub-agent');
 
-                html += `<div class="${classes.join(' ')}" data-session-key="${this.escapeHtml(session.key)}" title="${this.escapeHtml(session.key)}">`;
+                html += `<div class="${classes.join(' ')}" data-session-key='${session.key.replace(/'/g, "&#39;")}' title="${this.escapeHtml(session.key)}">`;
                 html += `<span class="session-label">${this.escapeHtml(label)}</span>`;
                 if (unread > 0 && !isActive) {
                     html += `<span class="session-badge">${unread}</span>`;

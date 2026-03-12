@@ -148,7 +148,7 @@ export class TestServer {
   // Multi-session state
   public sessions = new Map<string, SessionState>();
   public activeCompositeKey: string | null = null;
-  public speakWhitelist = new Map<string, { count: number; expiry: number }>();
+  public speakWhitelist = new Map<string, { count: number; expiry: number; sessionKey: string }>();
   private whitelistTTL = 5000;
 
   constructor() {
@@ -194,13 +194,25 @@ export class TestServer {
     return session;
   }
 
-  private getActiveSession(): SessionState {
+  private getActiveSession(): SessionState | null {
     if (this.activeCompositeKey) {
       const session = this.sessions.get(this.activeCompositeKey);
       if (session) return session;
     }
-    // Fallback: create/get default session without setting activeCompositeKey
-    // (only hook endpoints should set activeCompositeKey via registerIfFirst)
+    // No active session set — only return default if no real sessions exist
+    const hasRealSessions = Array.from(this.sessions.values()).some(s => s.sessionId !== 'default');
+    if (!hasRealSessions) {
+      const defaultKey = compositeKey('default');
+      return this.getOrCreateSession(defaultKey);
+    }
+    return null;
+  }
+
+  private getActiveSessionOrFirst(): SessionState {
+    const active = this.getActiveSession();
+    if (active) return active;
+    const first = this.sessions.values().next().value;
+    if (first) return first;
     const defaultKey = compositeKey('default');
     return this.getOrCreateSession(defaultKey);
   }
@@ -212,31 +224,42 @@ export class TestServer {
   private registerIfFirst(key: string): void {
     if (this.activeCompositeKey === null) {
       this.activeCompositeKey = key;
+    } else {
+      // If the current active is a default session and this is a real session, upgrade
+      const currentActive = this.sessions.get(this.activeCompositeKey);
+      if (currentActive && currentActive.sessionId === 'default') {
+        const parsed = JSON.parse(key) as [string, string];
+        if (parsed[0] !== 'default') {
+          this.activeCompositeKey = key;
+        }
+      }
     }
   }
 
-  private addToWhitelist(text: string): void {
+  private addToWhitelist(text: string, sessionKey: string): void {
     const existing = this.speakWhitelist.get(text);
     const expiry = Date.now() + this.whitelistTTL;
     if (existing) {
       existing.count++;
       existing.expiry = expiry;
+      existing.sessionKey = sessionKey;
     } else {
-      this.speakWhitelist.set(text, { count: 1, expiry });
+      this.speakWhitelist.set(text, { count: 1, expiry, sessionKey });
     }
   }
 
-  private checkWhitelist(text: string): boolean {
+  private checkWhitelist(text: string): { matched: boolean; sessionKey?: string } {
     this.cleanupWhitelist();
     const entry = this.speakWhitelist.get(text);
     if (entry && entry.count > 0) {
+      const sessionKey = entry.sessionKey;
       entry.count--;
       if (entry.count === 0) {
         this.speakWhitelist.delete(text);
       }
-      return true;
+      return { matched: true, sessionKey };
     }
-    return false;
+    return { matched: false };
   }
 
   private cleanupWhitelist(): void {
@@ -258,7 +281,7 @@ export class TestServer {
         return;
       }
 
-      const session = this.getActiveSession();
+      const session = this.getActiveSessionOrFirst();
       const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
       const utterance = session.queue.add(text, parsedTimestamp);
       res.json({
@@ -275,7 +298,7 @@ export class TestServer {
     // GET /api/utterances
     this.app.get('/api/utterances', (req, res) => {
       const limit = parseInt(req.query.limit as string) || 10;
-      const session = this.getActiveSession();
+      const session = this.getActiveSessionOrFirst();
       const utterances = session.queue.getRecent(limit);
 
       res.json({
@@ -291,7 +314,7 @@ export class TestServer {
     // GET /api/conversation
     this.app.get('/api/conversation', (req, res) => {
       const limit = parseInt(req.query.limit as string) || 50;
-      const session = this.getActiveSession();
+      const session = this.getActiveSessionOrFirst();
       const messages = session.queue.getRecentMessages(limit);
 
       res.json({
@@ -307,7 +330,7 @@ export class TestServer {
 
     // GET /api/utterances/status
     this.app.get('/api/utterances/status', (_req, res) => {
-      const session = this.getActiveSession();
+      const session = this.getActiveSessionOrFirst();
       const total = session.queue.utterances.length;
       const pending = session.queue.utterances.filter(u => u.status === 'pending').length;
       const delivered = session.queue.utterances.filter(u => u.status === 'delivered').length;
@@ -331,7 +354,7 @@ export class TestServer {
         return;
       }
 
-      const session = this.getActiveSession();
+      const session = this.getActiveSessionOrFirst();
       // For testing, just check immediately without polling
       const pendingUtterances = session.queue.utterances
         .filter(u => u.status === 'pending')
@@ -375,7 +398,7 @@ export class TestServer {
         return;
       }
 
-      const session = this.getActiveSession();
+      const session = this.getActiveSessionOrFirst();
       const pendingUtterances = session.queue.utterances
         .filter(u => u.status === 'pending')
         .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
@@ -411,16 +434,24 @@ export class TestServer {
       }
 
       // Check whitelist if multi-session is active
-      if (this.activeCompositeKey !== null && !this.checkWhitelist(text)) {
-        res.status(403).json({
-          error: 'Speak not authorized',
-          message: 'This text was not approved by the pre-speak hook for the active session'
-        });
-        return;
+      let whitelistSessionKey: string | undefined;
+      if (this.activeCompositeKey !== null) {
+        const whitelistResult = this.checkWhitelist(text);
+        if (!whitelistResult.matched) {
+          res.status(403).json({
+            error: 'Speak not authorized',
+            message: 'This text was not approved by the pre-speak hook for the active session'
+          });
+          return;
+        }
+        whitelistSessionKey = whitelistResult.sessionKey;
       }
 
       try {
-        const session = this.getActiveSession();
+        // Use the session from the whitelist entry for correct routing
+        const session = whitelistSessionKey
+          ? (this.sessions.get(whitelistSessionKey) || this.getActiveSessionOrFirst())
+          : this.getActiveSessionOrFirst();
 
         // Use macOS say command for TTS (mocked in tests)
         await execAsync(`say "${text.replace(/"/g, '\\"')}"`);
@@ -500,7 +531,7 @@ export class TestServer {
 
     // DELETE /api/utterances
     this.app.delete('/api/utterances', (_req, res) => {
-      const session = this.getActiveSession();
+      const session = this.getActiveSessionOrFirst();
       session.queue.clear();
       res.json({ success: true });
     });
@@ -514,7 +545,7 @@ export class TestServer {
         return;
       }
 
-      const session = this.getActiveSession();
+      const session = this.getActiveSessionOrFirst();
 
       // Check for pending utterances (only if voice input is active)
       if (this.voicePreferences.voiceInputActive) {
@@ -677,9 +708,9 @@ export class TestServer {
           return;
         }
 
-        // Whitelist the text for the speak endpoint
+        // Whitelist the text for the speak endpoint with session key
         if (speakText) {
-          this.addToWhitelist(speakText);
+          this.addToWhitelist(speakText, key);
         }
 
         res.json({ decision: 'approve' });
@@ -774,7 +805,7 @@ export class TestServer {
    * Get the active session's queue for direct state inspection in tests
    */
   getQueue(): UtteranceQueue {
-    return this.getActiveSession().queue;
+    return this.getActiveSessionOrFirst().queue;
   }
 
   /**
