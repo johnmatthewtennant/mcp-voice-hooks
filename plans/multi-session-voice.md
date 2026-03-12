@@ -51,19 +51,21 @@ Hooks read stdin and pass the full JSON (including agent_id) to the server:
 - **PostToolUse & Stop**: if agent_id present, return instant approve (skip voice routing)
 - **PreToolUse (speak)**: ALWAYS pass through to server — even for sub-agents
 
-### Pre-Speak Approval Pattern (new)
+### Pre-Speak Text Whitelist (new)
 
-The pre-speak hook receives agent_id. The MCP speak call arrives separately without agent identity (shared stdio connection). We bridge this gap with a simple approval flag:
+The pre-speak hook receives agent_id AND the speak text (from tool_input.text). The MCP speak call arrives separately without agent identity (shared stdio connection). We bridge this gap by whitelisting the specific text:
 
-1. **Pre-speak hook fires** → sends full JSON to server (includes agent_id)
+1. **Pre-speak hook fires** → sends full JSON to server (agent_id + tool_input.text)
 2. **Server receives pre-speak request**:
-   - If agent is **active** (or no agent_id = main agent): set approval flag, return approve
-   - If agent is **inactive**: don't set flag, return approve (hook still allows, but MCP call will be rejected)
+   - Stores the text in that agent's conversation history (keyed by agent_id)
+   - If agent is **active** (or no agent_id = main agent): whitelist the text, return approve
+   - If agent is **inactive**: store text in history but don't whitelist, return approve
 3. **MCP speak call arrives** (no agent identity):
-   - If approval flag is set → play TTS, clear flag, store in conversation history
-   - If no flag → reject (came from non-active agent)
+   - Check whitelist for matching text
+   - If match → play TTS, remove from whitelist
+   - If no match → reject (came from non-active agent)
 
-No text matching needed — just a boolean flag with a short TTL. The conversation history is built from whatever the MCP speak call sends.
+Text matching is needed because multiple agents may call speak in quick succession — a boolean flag can't distinguish whose call is which.
 
 This solves the shared MCP connection problem without needing per-agent MCP sessions.
 
