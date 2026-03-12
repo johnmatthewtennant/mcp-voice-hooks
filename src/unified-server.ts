@@ -1087,19 +1087,10 @@ app.post('/api/speak-system', async (req: Request, res: Response) => {
 
 // UI Routing
 app.get('/', (_req: Request, res: Response) => {
-  // Default to messenger UI (now index.html, can be overridden with --legacy-ui flag)
-  const useLegacyUI = process.env.MCP_VOICE_HOOKS_LEGACY_UI === 'true';
-  const htmlFile = useLegacyUI ? 'legacy.html' : 'index.html';
-  debugLog(`[HTTP] Serving ${htmlFile} for root route`);
-  res.sendFile(path.join(__dirname, '..', 'public', htmlFile));
-});
-
-app.get('/legacy', (_req: Request, res: Response) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'legacy.html'));
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
 app.get('/messenger', (_req: Request, res: Response) => {
-  // Messenger is now the default index.html
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 

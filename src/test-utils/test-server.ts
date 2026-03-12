@@ -652,11 +652,6 @@ export class TestServer {
       res.sendFile(path.join(publicDir, 'index.html'));
     });
 
-    this.app.get('/legacy', (_req, res) => {
-      const publicDir = path.join(process.cwd(), 'public');
-      res.sendFile(path.join(publicDir, 'legacy.html'));
-    });
-
     this.app.get('/messenger', (_req, res) => {
       // Messenger is now index.html
       const publicDir = path.join(process.cwd(), 'public');
