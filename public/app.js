@@ -209,9 +209,20 @@ class MessengerClient {
             return;
         }
 
+        // Hide default session when real sessions exist (unless it's active or has content)
+        const hasRealSessions = this.sessions.some(s => s.sessionId !== 'default');
+        const visibleSessions = hasRealSessions
+            ? this.sessions.filter(s => {
+                if (s.sessionId === 'default') {
+                    return s.isActive || (s.messageCount || 0) > 0 || s.utteranceCount > 0;
+                }
+                return true;
+            })
+            : this.sessions;
+
         // Group sessions by sessionId
         const groups = {};
-        for (const session of this.sessions) {
+        for (const session of visibleSessions) {
             const sid = session.sessionId;
             if (!groups[sid]) groups[sid] = [];
             groups[sid].push(session);
@@ -263,7 +274,10 @@ class MessengerClient {
     }
 
     formatSessionLabel(sessionId) {
-        if (sessionId === 'default') return 'Main Session';
+        if (sessionId === 'default') {
+            const hasReal = this.sessions.some(s => s.sessionId !== 'default');
+            return hasReal ? 'Unattached' : 'Main Session';
+        }
         // Truncate long session IDs
         if (sessionId.length > 16) return sessionId.substring(0, 8) + '...';
         return sessionId;

@@ -891,6 +891,7 @@ app.get('/api/sessions', (_req: Request, res: Response) => {
     isActive: s.key === activeCompositeKey,
     lastActivity: s.lastActivity,
     utteranceCount: s.queue.utterances.length,
+    messageCount: s.queue.messages.length,
     pendingCount: s.queue.utterances.filter(u => u.status === 'pending').length,
   }));
 

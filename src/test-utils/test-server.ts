@@ -570,6 +570,7 @@ export class TestServer {
         isActive: s.key === this.activeCompositeKey,
         lastActivity: s.lastActivity,
         utteranceCount: s.queue.utterances.length,
+        messageCount: s.queue.messages.length,
         pendingCount: s.queue.utterances.filter(u => u.status === 'pending').length,
       }));
 
