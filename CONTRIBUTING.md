@@ -25,11 +25,16 @@ For plugin development, use the dev marketplace instead of the production one. T
 
 ### How the plugin works
 
-The plugin has two parts:
+The plugin has two independently controlled parts:
 
-1. **Hooks** — Defined in `plugin/hooks/hooks.json`. Synced to the plugin cache at `~/.claude/plugins/cache/` and loaded at Claude Code session start. Changes require a restart.
+| Component | What controls it | Where it comes from |
+|-----------|-----------------|-------------------|
+| **Hooks** | `enabledPlugins` (which plugin is active) | `plugin/hooks/hooks.json` from the active plugin's marketplace |
+| **Server** | `npm link` / `npm unlink` | `dist/unified-server.js` resolved by npx |
 
-2. **Server** — `dist/unified-server.js`, launched via `npx mcp-voice-hooks`. After `npm link`, npx resolves to your local build.
+- **Switching plugins** changes which hooks run (dev vs production hooks.json)
+- **npm link/unlink** changes which server code runs (local build vs published npm package)
+- These are independent — you can run the production plugin's hooks with a local server, or dev hooks with the published server
 
 ### Setting up the dev plugin
 
