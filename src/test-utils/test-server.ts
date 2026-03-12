@@ -458,18 +458,8 @@ export class TestServer {
       res.sendFile(path.join(publicDir, 'index.html'));
     });
 
-    // Helper: check if hook request is from a sub-agent
-    const isSubagentRequest = (req: express.Request): boolean => {
-      return !!req.body?.agent_id;
-    };
-
     // Hook endpoints for testing
-    this.app.post('/api/hooks/stop', (req, res) => {
-      if (isSubagentRequest(req)) {
-        res.json({ decision: 'approve' });
-        return;
-      }
-
+    this.app.post('/api/hooks/stop', (_req, res) => {
       // Check for pending utterances
       const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
       if (pendingUtterances.length > 0) {
@@ -495,13 +485,8 @@ export class TestServer {
       res.json({ decision: 'approve' });
     });
 
-    // Pre-speak hook — blocks sub-agents from using speak
-    this.app.post('/api/hooks/pre-speak', (req, res) => {
-      if (isSubagentRequest(req)) {
-        res.json({ decision: 'block', reason: 'Voice responses are not available for sub-agents. Communicate via text output instead.' });
-        return;
-      }
-
+    // Pre-speak hook
+    this.app.post('/api/hooks/pre-speak', (_req, res) => {
       // Check for pending utterances
       const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
       if (pendingUtterances.length > 0) {
@@ -515,13 +500,8 @@ export class TestServer {
       res.json({ decision: 'approve' });
     });
 
-    // Post-tool hook — skips voice routing for sub-agents
-    this.app.post('/api/hooks/post-tool', (req, res) => {
-      if (isSubagentRequest(req)) {
-        res.json({ decision: 'approve' });
-        return;
-      }
-
+    // Post-tool hook
+    this.app.post('/api/hooks/post-tool', (_req, res) => {
       // Check for pending utterances and dequeue
       const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
       if (pendingUtterances.length > 0) {
