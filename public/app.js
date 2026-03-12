@@ -30,6 +30,12 @@ class MessengerClient {
         this.rateWarning = document.getElementById('rateWarning');
         this.systemVoiceInfo = document.getElementById('systemVoiceInfo');
 
+        // Session sidebar elements
+        this.sessionSidebar = document.getElementById('sessionSidebar');
+        this.sessionList = document.getElementById('sessionList');
+        this.sidebarOpenBtn = document.getElementById('sidebarOpenBtn');
+        this.sidebarCloseBtn = document.getElementById('sidebarCloseBtn');
+
         // State
         this.sendMode = 'automatic'; // 'automatic' or 'trigger'
         this.triggerWord = 'send';
@@ -44,16 +50,24 @@ class MessengerClient {
         this.speechRate = 1.0;
         this.speechPitch = 1.0;
 
+        // Session state
+        this.sessions = [];
+        this.activeSessionKey = null;
+        this.unreadCounts = {}; // key → count of messages since last viewed
+
         // Initialize
         this.initializeSpeechRecognition();
         this.initializeSpeechSynthesis();
         this.initializeTTSEvents();
+        this.initializeSessionSidebar();
         this.setupEventListeners();
         this.loadPreferences();
         this.loadData();
 
         // Auto-refresh every 2 seconds
         setInterval(() => this.loadData(), 2000);
+        // Refresh sessions every 3 seconds
+        setInterval(() => this.loadSessions(), 3000);
     }
 
     debugLog(...args) {
@@ -133,6 +147,151 @@ class MessengerClient {
             if (isWaiting) {
                 this.scrollToBottom();
             }
+        }
+    }
+
+    initializeSessionSidebar() {
+        if (this.sidebarOpenBtn) {
+            this.sidebarOpenBtn.addEventListener('click', () => this.toggleSidebar(true));
+        }
+        if (this.sidebarCloseBtn) {
+            this.sidebarCloseBtn.addEventListener('click', () => this.toggleSidebar(false));
+        }
+        // Load sessions immediately
+        this.loadSessions();
+    }
+
+    toggleSidebar(open) {
+        if (this.sessionSidebar) {
+            if (open) {
+                this.sessionSidebar.classList.remove('collapsed');
+                if (this.sidebarOpenBtn) this.sidebarOpenBtn.classList.remove('visible');
+            } else {
+                this.sessionSidebar.classList.add('collapsed');
+                if (this.sidebarOpenBtn) this.sidebarOpenBtn.classList.add('visible');
+            }
+        }
+    }
+
+    async loadSessions() {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/sessions`);
+            if (!response.ok) return;
+            const data = await response.json();
+            this.sessions = data.sessions || [];
+            this.activeSessionKey = data.activeKey;
+
+            // Show sidebar button when there are multiple sessions
+            const hasMultipleSessions = this.sessions.length > 1;
+            if (hasMultipleSessions && this.sessionSidebar.classList.contains('collapsed')) {
+                if (this.sidebarOpenBtn) this.sidebarOpenBtn.classList.add('visible');
+            }
+
+            // Track unread counts for inactive sessions
+            for (const session of this.sessions) {
+                if (!session.isActive && session.pendingCount > 0) {
+                    const key = session.key;
+                    this.unreadCounts[key] = (this.unreadCounts[key] || 0) + session.pendingCount;
+                }
+            }
+
+            this.renderSessionList();
+        } catch (error) {
+            this.debugLog('Failed to load sessions:', error);
+        }
+    }
+
+    renderSessionList() {
+        if (!this.sessionList) return;
+
+        if (this.sessions.length === 0) {
+            this.sessionList.innerHTML = '<div style="padding: 16px; color: #999; font-size: 13px; text-align: center;">No sessions connected</div>';
+            return;
+        }
+
+        // Group sessions by sessionId
+        const groups = {};
+        for (const session of this.sessions) {
+            const sid = session.sessionId;
+            if (!groups[sid]) groups[sid] = [];
+            groups[sid].push(session);
+        }
+
+        let html = '';
+        for (const [sessionId, members] of Object.entries(groups)) {
+            html += '<div class="session-group">';
+            // Sort: main agent first, then sub-agents
+            members.sort((a, b) => {
+                if (!a.agentId && b.agentId) return -1;
+                if (a.agentId && !b.agentId) return 1;
+                return 0;
+            });
+
+            for (const session of members) {
+                const isActive = session.key === this.activeSessionKey;
+                const isSubAgent = !!session.agentId;
+                const label = isSubAgent
+                    ? (session.agentType || session.agentId || 'sub-agent')
+                    : this.formatSessionLabel(sessionId);
+                const unread = this.unreadCounts[session.key] || 0;
+
+                const classes = ['session-item'];
+                if (isActive) classes.push('active');
+                if (isSubAgent) classes.push('sub-agent');
+
+                html += `<div class="${classes.join(' ')}" data-session-key="${this.escapeHtml(session.key)}" title="${this.escapeHtml(session.key)}">`;
+                html += `<span class="session-label">${this.escapeHtml(label)}</span>`;
+                if (unread > 0 && !isActive) {
+                    html += `<span class="session-badge">${unread}</span>`;
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+
+        this.sessionList.innerHTML = html;
+
+        // Add click handlers
+        this.sessionList.querySelectorAll('.session-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const key = item.dataset.sessionKey;
+                if (key && key !== this.activeSessionKey) {
+                    this.switchActiveSession(key);
+                }
+            });
+        });
+    }
+
+    formatSessionLabel(sessionId) {
+        if (sessionId === 'default') return 'Main Session';
+        // Truncate long session IDs
+        if (sessionId.length > 16) return sessionId.substring(0, 8) + '...';
+        return sessionId;
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    async switchActiveSession(key) {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/active-session`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key }),
+            });
+            if (response.ok) {
+                this.activeSessionKey = key;
+                // Clear unread for this session
+                delete this.unreadCounts[key];
+                // Reload conversation for new active session
+                this.loadData();
+                this.loadSessions();
+            }
+        } catch (error) {
+            console.error('Failed to switch session:', error);
         }
     }
 
