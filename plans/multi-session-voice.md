@@ -38,12 +38,20 @@ Session isolation on both the **speak tool** (MCP) and the **hooks** (HTTP). The
 
 ### Session Identification
 
-Hooks read the stdin JSON and pass `session_id`, `agent_id`, and `agent_type` to the server. The server uses these to route:
+Every hook call includes `session_id` and optionally `agent_id` in the stdin JSON. These form a **composite key**: `session_id + agent_id`.
 
-- **No `agent_id`** → main agent → full voice routing (dequeue, speak, wait)
-- **Has `agent_id`** → sub-agent → server decides based on active session:
-  - If this agent's session is active in the UI → route voice
-  - Otherwise → instant approve, no dequeue
+- `session_id` distinguishes separate Claude Code processes (main vs tmux teammate)
+- `agent_id` distinguishes agents within the same process (main vs sub-agent)
+- Each unique `(session_id, agent_id)` combo gets its own conversation thread
+
+The server tracks which combo is "active" — only that one gets voice input and TTS.
+
+| Scenario | session_id | agent_id | Behavior |
+|----------|-----------|----------|----------|
+| Main agent | abc123 | (absent) | Active by default |
+| Sub-agent | abc123 | def456 | Blocked (same session, different agent) |
+| Tmux teammate | xyz789 | (absent) | Blocked (different session) |
+| Teammate's sub-agent | xyz789 | ghi012 | Blocked (different session + agent) |
 
 ### Hook Changes (implemented)
 
@@ -53,34 +61,35 @@ Hooks read stdin and pass the full JSON (including agent_id) to the server:
 
 ### Pre-Speak Text Whitelist (new)
 
-The pre-speak hook receives agent_id AND the speak text (from tool_input.text). The MCP speak call arrives separately without agent identity (shared stdio connection). We bridge this gap by whitelisting the specific text:
+The pre-speak hook receives `session_id`, `agent_id`, AND the speak text (`tool_input.text`). The MCP speak call arrives separately without session/agent identity (shared stdio connection). We bridge this gap by whitelisting the specific text:
 
-1. **Pre-speak hook fires** → sends full JSON to server (agent_id + tool_input.text)
+1. **Pre-speak hook fires** → sends full JSON to server (session_id + agent_id + tool_input.text)
 2. **Server receives pre-speak request**:
-   - Stores the text in that agent's conversation history (keyed by agent_id)
-   - If agent is **active** (or no agent_id = main agent): whitelist the text, return approve
-   - If agent is **inactive**: store text in history but don't whitelist, return approve
-3. **MCP speak call arrives** (no agent identity):
+   - Computes composite key: `(session_id, agent_id || "main")`
+   - Stores the text in that key's conversation history
+   - If composite key is **active**: whitelist the text, return approve
+   - If composite key is **inactive**: store text in history but don't whitelist, return approve
+3. **MCP speak call arrives** (no session/agent identity):
    - Check whitelist for matching text
    - If match → play TTS, remove from whitelist
-   - If no match → reject (came from non-active agent)
+   - If no match → reject (came from non-active agent/session)
 
 Text matching is needed because multiple agents may call speak in quick succession — a boolean flag can't distinguish whose call is which.
 
-This solves the shared MCP connection problem without needing per-agent MCP sessions.
+This solves both the sub-agent problem (same session, different agent_id) and the tmux teammate problem (different session_id, no agent_id).
 
 ### Per-Session State
 
 Replace all global state with a session map:
 
 ```typescript
+// Composite key: `${sessionId}:${agentId || "main"}`
 interface SessionState {
   sessionId: string;          // From hook input session_id
-  agentId: string | null;     // null for main agent
-  agentType: string | null;
-  queue: UtteranceQueue;
-  voicePreferences: VoicePreferences;
+  agentId: string | null;     // From hook input agent_id (null = main agent)
+  agentType: string | null;   // From hook input agent_type
   conversationHistory: Message[];
+  speakWhitelist: Set<string>; // Pre-approved speak texts
   lastToolUseTimestamp: Date | null;
   lastSpeakTimestamp: Date | null;
 }
