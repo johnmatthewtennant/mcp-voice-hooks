@@ -77,6 +77,28 @@ npm test
 # (hooks changes require restart; server changes require restart if not symlinked)
 ```
 
+### Switching back to production
+
+To use the published npm version instead of your local build:
+
+```bash
+cd /path/to/mcp-voice-hooks
+npm unlink
+```
+
+Then swap the plugins in your settings:
+
+```json
+{
+  "enabledPlugins": {
+    "mcp-voice-hooks-dev-plugin@mcp-voice-hooks-dev-marketplace": false,
+    "mcp-voice-hooks-plugin@mcp-voice-hooks-marketplace": true
+  }
+}
+```
+
+**Note**: `npm link` affects ALL plugins, not just the dev one. Even with the production plugin enabled, npm link makes npx resolve to your local build. Always `npm unlink` when you want the published version.
+
 ## Debug Mode
 
 Enable debug logging to see detailed server output:
