@@ -620,8 +620,16 @@ export class TestServer {
       this.registerIfFirst(key);
       const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
 
-      // Only route voice for active session
+      // Inactive session: enforce "must speak after tool use" but skip voice input routing
       if (!this.isActiveKey(key)) {
+        if (this.voicePreferences.voiceResponsesEnabled && session.lastToolUseTimestamp &&
+          (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
+          res.json({
+            decision: 'block',
+            reason: 'Assistant must use the speak tool to provide a response before stopping. Your voice output will be stored in session history.'
+          });
+          return;
+        }
         res.json({ decision: 'approve' });
         return;
       }
@@ -678,13 +686,14 @@ export class TestServer {
         return;
       }
 
-      // Inactive session: store in that session's conversation history, block
+      // Inactive session: store in that session's conversation history, block TTS
       if (speakText) {
         session.queue.addAssistantMessage(speakText);
+        session.lastSpeakTimestamp = new Date();
       }
       res.json({
         decision: 'block',
-        reason: 'Voice output is routed to the active session only. Your message has been stored in conversation history.'
+        reason: 'Voice output stored in session history. TTS is routed to the active session only.'
       });
     });
 
@@ -694,8 +703,9 @@ export class TestServer {
       this.registerIfFirst(key);
       const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
 
-      // Only route voice for active session
+      // Inactive session: still track tool use but don't route voice
       if (!this.isActiveKey(key)) {
+        session.lastToolUseTimestamp = new Date();
         res.json({ decision: 'approve' });
         return;
       }

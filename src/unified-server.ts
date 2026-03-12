@@ -691,9 +691,17 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   const { key, session } = parseHookRequest(req);
   registerIfFirst(key);
 
-  // Only route voice for active session
+  // Inactive session: enforce "must speak after tool use" but skip voice input routing
   if (!isActiveKey(key)) {
-    debugLog(`[Hook] stop: key=${key} active=false (instant approve)`);
+    if (voicePreferences.voiceResponsesEnabled && session.lastToolUseTimestamp &&
+      (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
+      res.json({
+        decision: 'block',
+        reason: 'Assistant must use the speak tool to provide a response before stopping. Your voice output will be stored in session history.'
+      });
+      return;
+    }
+    debugLog(`[Hook] stop: key=${key} active=false (approve)`);
     res.json({ decision: 'approve' });
     return;
   }
@@ -721,14 +729,15 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
     return;
   }
 
-  // Inactive session: store in that session's conversation history, block the speak
+  // Inactive session: store in that session's conversation history, block TTS
   if (speakText) {
     session.queue.addAssistantMessage(speakText);
-    debugLog(`[Whitelist] Rejected (inactive): key=${key} text="${speakText.slice(0, 30)}..."`);
+    session.lastSpeakTimestamp = new Date();
+    debugLog(`[Speak] Stored for inactive session: key=${key} text="${speakText.slice(0, 30)}..."`);
   }
   res.json({
     decision: 'block',
-    reason: 'Voice output is routed to the active session only. Your message has been stored in conversation history.'
+    reason: 'Voice output stored in session history. TTS is routed to the active session only.'
   });
 });
 
@@ -738,9 +747,10 @@ app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
   const { key, session } = parseHookRequest(req);
   registerIfFirst(key);
 
-  // Only route voice for active session
+  // Inactive session: still track tool use but don't route voice
   if (!isActiveKey(key)) {
-    debugLog(`[Hook] post-tool: key=${key} active=false (instant approve)`);
+    session.lastToolUseTimestamp = new Date();
+    debugLog(`[Hook] post-tool: key=${key} active=false (approve, tracking tool use)`);
     res.json({ decision: 'approve' });
     return;
   }

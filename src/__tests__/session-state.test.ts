@@ -135,4 +135,130 @@ describe('Per-session state and session lifecycle', () => {
       expect(assistantMsgs.some(m => m.text === 'I am B')).toBe(true);
     });
   });
+
+  describe('Inactive session voice enforcement', () => {
+    it('inactive session stop blocks when unspoken after tool use', async () => {
+      // Set session-A as active
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-A' }),
+      });
+
+      // Enable voice responses
+      await fetch(`${server.url}/api/voice-responses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+
+      // Session-B uses a tool (creates session, sets lastToolUseTimestamp)
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-B' }),
+      });
+
+      // Session-B tries to stop — should block (hasn't spoken since tool use)
+      const res = await fetch(`${server.url}/api/hooks/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-B' }),
+      });
+      const data = await res.json() as any;
+      expect(data.decision).toBe('block');
+      expect(data.reason).toContain('speak');
+    });
+
+    it('inactive session pre-speak satisfies speak requirement for stop', async () => {
+      // Set session-A as active
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-A' }),
+      });
+
+      // Enable voice responses
+      await fetch(`${server.url}/api/voice-responses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+
+      // Session-B uses a tool
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-B' }),
+      });
+
+      // Session-B speaks (blocked from TTS but updates lastSpeakTimestamp)
+      const speakRes = await fetch(`${server.url}/api/hooks/pre-speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: 'session-B',
+          tool_input: { text: 'My response' },
+        }),
+      });
+      const speakData = await speakRes.json() as any;
+      expect(speakData.decision).toBe('block'); // TTS blocked for inactive
+
+      // Session-B tries to stop — should now approve
+      const stopRes = await fetch(`${server.url}/api/hooks/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-B' }),
+      });
+      const stopData = await stopRes.json() as any;
+      expect(stopData.decision).toBe('approve');
+    });
+
+    it('inactive session stop approves with no prior tool use', async () => {
+      // Set session-A as active
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-A' }),
+      });
+
+      // Enable voice responses
+      await fetch(`${server.url}/api/voice-responses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+
+      // Session-C created via stop (no prior tool use — lastToolUseTimestamp is null)
+      const res = await fetch(`${server.url}/api/hooks/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-C' }),
+      });
+      const data = await res.json() as any;
+      expect(data.decision).toBe('approve');
+    });
+
+    it('sessions response includes messageCount', async () => {
+      // Register session-A as active
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-A' }),
+      });
+
+      // Add an utterance to session-A
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Hello' }),
+      });
+
+      const res = await fetch(`${server.url}/api/sessions`);
+      const data = await res.json() as any;
+      const sessionA = data.sessions.find((s: any) => s.sessionId === 'session-A');
+      expect(sessionA).toBeDefined();
+      expect(sessionA.messageCount).toBe(1);
+    });
+  });
 });
