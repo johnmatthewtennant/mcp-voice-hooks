@@ -33,6 +33,13 @@ describe('Hook endpoints (main agent, no agent_id)', () => {
     });
 
     it('should dequeue and block when utterances pending', async () => {
+      // Register the session first so utterances go to the active session
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'test', hook_event_name: 'PostToolUse' }),
+      });
+
       await fetch(`${server.url}/api/potential-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

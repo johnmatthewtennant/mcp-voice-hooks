@@ -191,7 +191,7 @@ class MessengerClient {
             for (const session of this.sessions) {
                 if (!session.isActive && session.pendingCount > 0) {
                     const key = session.key;
-                    this.unreadCounts[key] = (this.unreadCounts[key] || 0) + session.pendingCount;
+                    this.unreadCounts[key] = session.pendingCount;
                 }
             }
 

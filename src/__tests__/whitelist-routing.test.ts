@@ -192,11 +192,12 @@ describe('Pre-speak whitelist and multi-session routing', () => {
       expect(data.decision).toBe('block');
       expect(data.reason).toContain('active session only');
 
-      // Verify text was stored in conversation history
-      const convRes = await fetch(`${server.url}/api/conversation`);
-      const convData = await convRes.json() as any;
-      const assistantMessages = convData.messages.filter((m: any) => m.role === 'assistant');
-      expect(assistantMessages.some((m: any) => m.text === 'I am session B')).toBe(true);
+      // Verify text was stored in session-B's conversation history
+      const sessionBKey = JSON.stringify(['session-B', 'main']);
+      const sessionB = server.sessions.get(sessionBKey);
+      expect(sessionB).toBeDefined();
+      const assistantMessages = sessionB!.queue.messages.filter(m => m.role === 'assistant');
+      expect(assistantMessages.some(m => m.text === 'I am session B')).toBe(true);
     });
   });
 
@@ -220,7 +221,14 @@ describe('Pre-speak whitelist and multi-session routing', () => {
     });
 
     it('active session post-tool dequeues pending utterances', async () => {
-      // Add an utterance
+      // Register session-A as active first
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-A' }),
+      });
+
+      // Add an utterance (goes to active session)
       await fetch(`${server.url}/api/potential-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

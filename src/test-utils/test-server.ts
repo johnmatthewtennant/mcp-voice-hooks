@@ -117,6 +117,18 @@ interface VoicePreferences {
   voiceInputActive: boolean;
 }
 
+// Per-session state (mirrors unified-server.ts)
+interface SessionState {
+  key: string;
+  sessionId: string;
+  agentId: string | null;
+  agentType: string | null;
+  queue: UtteranceQueue;
+  lastToolUseTimestamp: Date | null;
+  lastSpeakTimestamp: Date | null;
+  lastActivity: Date;
+}
+
 // Composite key helper
 function compositeKey(sessionId: string, agentId?: string | null): string {
   return JSON.stringify([sessionId, agentId || 'main']);
@@ -129,21 +141,18 @@ function compositeKey(sessionId: string, agentId?: string | null): string {
 export class TestServer {
   private app: Express;
   private server: http.Server | null = null;
-  private queue: UtteranceQueue;
   private voicePreferences: VoicePreferences;
-  private lastToolUseTimestamp: Date | null = null;
-  private lastSpeakTimestamp: Date | null = null;
   public port: number = 0;
   public url: string = '';
 
   // Multi-session state
+  public sessions = new Map<string, SessionState>();
   public activeCompositeKey: string | null = null;
   public speakWhitelist = new Map<string, { count: number; expiry: number }>();
   private whitelistTTL = 5000;
 
   constructor() {
     this.app = express();
-    this.queue = new UtteranceQueue();
     this.voicePreferences = {
       voiceResponsesEnabled: false,
       voiceInputActive: false
@@ -158,11 +167,42 @@ export class TestServer {
     this.app.use(express.json());
   }
 
-  private parseCompositeKey(body: any): { key: string; sessionId: string; agentId: string | null } {
+  private parseCompositeKey(body: any): { key: string; sessionId: string; agentId: string | null; agentType: string | null } {
     const sessionId = body?.session_id || 'default';
     const agentId = body?.agent_id || null;
+    const agentType = body?.agent_type || null;
     const key = compositeKey(sessionId, agentId);
-    return { key, sessionId, agentId };
+    return { key, sessionId, agentId, agentType };
+  }
+
+  private getOrCreateSession(key: string, sessionId?: string, agentId?: string | null, agentType?: string | null): SessionState {
+    let session = this.sessions.get(key);
+    if (!session) {
+      session = {
+        key,
+        sessionId: sessionId || 'default',
+        agentId: agentId || null,
+        agentType: agentType || null,
+        queue: new UtteranceQueue(),
+        lastToolUseTimestamp: null,
+        lastSpeakTimestamp: null,
+        lastActivity: new Date(),
+      };
+      this.sessions.set(key, session);
+    }
+    session.lastActivity = new Date();
+    return session;
+  }
+
+  private getActiveSession(): SessionState {
+    if (this.activeCompositeKey) {
+      const session = this.sessions.get(this.activeCompositeKey);
+      if (session) return session;
+    }
+    // Fallback: create/get default session without setting activeCompositeKey
+    // (only hook endpoints should set activeCompositeKey via registerIfFirst)
+    const defaultKey = compositeKey('default');
+    return this.getOrCreateSession(defaultKey);
   }
 
   private isActiveKey(key: string): boolean {
@@ -218,8 +258,9 @@ export class TestServer {
         return;
       }
 
+      const session = this.getActiveSession();
       const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
-      const utterance = this.queue.add(text, parsedTimestamp);
+      const utterance = session.queue.add(text, parsedTimestamp);
       res.json({
         success: true,
         utterance: {
@@ -234,7 +275,8 @@ export class TestServer {
     // GET /api/utterances
     this.app.get('/api/utterances', (req, res) => {
       const limit = parseInt(req.query.limit as string) || 10;
-      const utterances = this.queue.getRecent(limit);
+      const session = this.getActiveSession();
+      const utterances = session.queue.getRecent(limit);
 
       res.json({
         utterances: utterances.map(u => ({
@@ -249,7 +291,8 @@ export class TestServer {
     // GET /api/conversation
     this.app.get('/api/conversation', (req, res) => {
       const limit = parseInt(req.query.limit as string) || 50;
-      const messages = this.queue.getRecentMessages(limit);
+      const session = this.getActiveSession();
+      const messages = session.queue.getRecentMessages(limit);
 
       res.json({
         messages: messages.map(m => ({
@@ -264,10 +307,11 @@ export class TestServer {
 
     // GET /api/utterances/status
     this.app.get('/api/utterances/status', (_req, res) => {
-      const total = this.queue.utterances.length;
-      const pending = this.queue.utterances.filter(u => u.status === 'pending').length;
-      const delivered = this.queue.utterances.filter(u => u.status === 'delivered').length;
-      const responded = this.queue.utterances.filter(u => u.status === 'responded').length;
+      const session = this.getActiveSession();
+      const total = session.queue.utterances.length;
+      const pending = session.queue.utterances.filter(u => u.status === 'pending').length;
+      const delivered = session.queue.utterances.filter(u => u.status === 'delivered').length;
+      const responded = session.queue.utterances.filter(u => u.status === 'responded').length;
 
       res.json({
         total,
@@ -287,14 +331,15 @@ export class TestServer {
         return;
       }
 
+      const session = this.getActiveSession();
       // For testing, just check immediately without polling
-      const pendingUtterances = this.queue.utterances
+      const pendingUtterances = session.queue.utterances
         .filter(u => u.status === 'pending')
         .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
       if (pendingUtterances.length > 0) {
         pendingUtterances.forEach(u => {
-          this.queue.markDelivered(u.id);
+          session.queue.markDelivered(u.id);
         });
 
         res.json({
@@ -330,12 +375,13 @@ export class TestServer {
         return;
       }
 
-      const pendingUtterances = this.queue.utterances
+      const session = this.getActiveSession();
+      const pendingUtterances = session.queue.utterances
         .filter(u => u.status === 'pending')
         .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
       pendingUtterances.forEach(u => {
-        this.queue.markDelivered(u.id);
+        session.queue.markDelivered(u.id);
       });
 
       res.json({
@@ -374,19 +420,21 @@ export class TestServer {
       }
 
       try {
+        const session = this.getActiveSession();
+
         // Use macOS say command for TTS (mocked in tests)
         await execAsync(`say "${text.replace(/"/g, '\\"')}"`);
 
         // Store assistant's response in conversation history
-        this.queue.addAssistantMessage(text);
+        session.queue.addAssistantMessage(text);
 
         // Mark all delivered utterances as responded
-        const deliveredUtterances = this.queue.utterances.filter(u => u.status === 'delivered');
+        const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
         deliveredUtterances.forEach(u => {
-          this.queue.markResponded(u.id);
+          session.queue.markResponded(u.id);
         });
 
-        this.lastSpeakTimestamp = new Date();
+        session.lastSpeakTimestamp = new Date();
 
         res.json({
           success: true,
@@ -452,7 +500,8 @@ export class TestServer {
 
     // DELETE /api/utterances
     this.app.delete('/api/utterances', (_req, res) => {
-      this.queue.clear();
+      const session = this.getActiveSession();
+      session.queue.clear();
       res.json({ success: true });
     });
 
@@ -465,9 +514,11 @@ export class TestServer {
         return;
       }
 
+      const session = this.getActiveSession();
+
       // Check for pending utterances (only if voice input is active)
       if (this.voicePreferences.voiceInputActive) {
-        const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
+        const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
         if (pendingUtterances.length > 0) {
           res.json({
             allowed: false,
@@ -480,7 +531,7 @@ export class TestServer {
 
       // Check for delivered but unresponded utterances (when voice enabled)
       if (this.voicePreferences.voiceResponsesEnabled) {
-        const deliveredUtterances = this.queue.utterances.filter(u => u.status === 'delivered');
+        const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
         if (deliveredUtterances.length > 0) {
           res.json({
             allowed: false,
@@ -493,7 +544,7 @@ export class TestServer {
 
       // For stop action, check if we should wait (only if voice input is active)
       if (action === 'stop' && this.voicePreferences.voiceInputActive) {
-        if (this.queue.utterances.length > 0) {
+        if (session.queue.utterances.length > 0) {
           res.json({
             allowed: false,
             requiredAction: 'wait_for_utterance',
@@ -506,6 +557,41 @@ export class TestServer {
       // All checks passed - action is allowed
       res.json({
         allowed: true
+      });
+    });
+
+    // GET /api/sessions
+    this.app.get('/api/sessions', (_req, res) => {
+      const sessionList = Array.from(this.sessions.values()).map(s => ({
+        key: s.key,
+        sessionId: s.sessionId,
+        agentId: s.agentId,
+        agentType: s.agentType,
+        isActive: s.key === this.activeCompositeKey,
+        lastActivity: s.lastActivity,
+        utteranceCount: s.queue.utterances.length,
+        pendingCount: s.queue.utterances.filter(u => u.status === 'pending').length,
+      }));
+
+      res.json({
+        sessions: sessionList,
+        activeKey: this.activeCompositeKey,
+      });
+    });
+
+    // POST /api/active-session
+    this.app.post('/api/active-session', (req, res) => {
+      const { key } = req.body;
+
+      if (!key || !this.sessions.has(key)) {
+        res.status(400).json({ error: 'Invalid session key' });
+        return;
+      }
+
+      this.activeCompositeKey = key;
+      res.json({
+        success: true,
+        activeKey: this.activeCompositeKey,
       });
     });
 
@@ -529,8 +615,9 @@ export class TestServer {
 
     // Hook endpoints for testing
     this.app.post('/api/hooks/stop', (req, res) => {
-      const { key } = this.parseCompositeKey(req.body);
+      const { key, sessionId, agentId, agentType } = this.parseCompositeKey(req.body);
       this.registerIfFirst(key);
+      const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
 
       // Only route voice for active session
       if (!this.isActiveKey(key)) {
@@ -539,7 +626,7 @@ export class TestServer {
       }
 
       // Check for pending utterances
-      const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
+      const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
       if (pendingUtterances.length > 0) {
         res.json({
           decision: 'block',
@@ -550,7 +637,7 @@ export class TestServer {
 
       // Check for unresponded utterances (when voice responses enabled)
       if (this.voicePreferences.voiceResponsesEnabled) {
-        const deliveredUtterances = this.queue.utterances.filter(u => u.status === 'delivered');
+        const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
         if (deliveredUtterances.length > 0) {
           res.json({
             decision: 'block',
@@ -565,13 +652,14 @@ export class TestServer {
 
     // Pre-speak hook
     this.app.post('/api/hooks/pre-speak', (req, res) => {
-      const { key } = this.parseCompositeKey(req.body);
+      const { key, sessionId, agentId, agentType } = this.parseCompositeKey(req.body);
       this.registerIfFirst(key);
+      const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
       const speakText = req.body?.tool_input?.text;
 
       // Active session: check for pending utterances, whitelist text
       if (this.isActiveKey(key)) {
-        const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
+        const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
         if (pendingUtterances.length > 0) {
           res.json({
             decision: 'block',
@@ -589,9 +677,9 @@ export class TestServer {
         return;
       }
 
-      // Inactive session: store in conversation history, block
+      // Inactive session: store in that session's conversation history, block
       if (speakText) {
-        this.queue.addAssistantMessage(speakText);
+        session.queue.addAssistantMessage(speakText);
       }
       res.json({
         decision: 'block',
@@ -601,8 +689,9 @@ export class TestServer {
 
     // Post-tool hook
     this.app.post('/api/hooks/post-tool', (req, res) => {
-      const { key } = this.parseCompositeKey(req.body);
+      const { key, sessionId, agentId, agentType } = this.parseCompositeKey(req.body);
       this.registerIfFirst(key);
+      const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
 
       // Only route voice for active session
       if (!this.isActiveKey(key)) {
@@ -611,7 +700,7 @@ export class TestServer {
       }
 
       // Check for pending utterances and dequeue
-      const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
+      const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
       if (pendingUtterances.length > 0) {
         // Dequeue them
         for (const u of pendingUtterances) {
@@ -671,10 +760,10 @@ export class TestServer {
   }
 
   /**
-   * Get the queue for direct state inspection in tests
+   * Get the active session's queue for direct state inspection in tests
    */
   getQueue(): UtteranceQueue {
-    return this.queue;
+    return this.getActiveSession().queue;
   }
 
   /**
@@ -688,13 +777,11 @@ export class TestServer {
    * Reset all state (useful between tests)
    */
   reset(): void {
-    this.queue.clear();
+    this.sessions.clear();
     this.voicePreferences = {
       voiceResponsesEnabled: false,
       voiceInputActive: false
     };
-    this.lastToolUseTimestamp = null;
-    this.lastSpeakTimestamp = null;
     this.activeCompositeKey = null;
     this.speakWhitelist.clear();
   }

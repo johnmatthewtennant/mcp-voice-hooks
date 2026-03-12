@@ -188,7 +188,7 @@ function getOrCreateSession(key: string, sessionId?: string, agentId?: string | 
       lastActivity: new Date(),
     };
     sessions.set(key, session);
-    debugLog(`[Session] Created new session: ${key}`);
+    debugLog(`[Session] Created new session: key=${key} sessionId=${sessionId || 'default'} agentId=${agentId || 'main'} agentType=${agentType || 'none'}`);
   }
   session.lastActivity = new Date();
   return session;
@@ -199,11 +199,9 @@ function getActiveSession(): SessionState {
     const session = sessions.get(activeCompositeKey);
     if (session) return session;
   }
-  // Fallback: create/get default session
+  // Fallback: create/get default session without setting activeCompositeKey
+  // (only hook endpoints should set activeCompositeKey via registerIfFirst)
   const defaultKey = compositeKey('default');
-  if (!activeCompositeKey) {
-    activeCompositeKey = defaultKey;
-  }
   return getOrCreateSession(defaultKey);
 }
 
@@ -213,7 +211,9 @@ function cleanupSessions(): void {
   for (const [key, session] of sessions) {
     if (now - session.lastActivity.getTime() > SESSION_TTL_MS) {
       sessions.delete(key);
-      debugLog(`[Session] Expired inactive session: ${key}`);
+      const wasActive = key === activeCompositeKey;
+      if (wasActive) activeCompositeKey = null;
+      debugLog(`[Session] Expired inactive session: ${key} (sessionId=${session.sessionId} agentId=${session.agentId || 'main'} wasActive=${wasActive} utterances=${session.queue.utterances.length})`);
     }
   }
 }
@@ -251,6 +251,7 @@ function checkWhitelist(text: string): boolean {
     debugLog(`[Whitelist] Consumed "${text.substring(0, 50)}..." remaining=${entry.count}`);
     return true;
   }
+  debugLog(`[Whitelist] Rejected "${text.substring(0, 50)}..." — not in whitelist`);
   return false;
 }
 
@@ -714,6 +715,7 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
     // If approved and we have text, add to whitelist
     if (speakText && (result as any).decision !== 'block') {
       addToWhitelist(speakText);
+      debugLog(`[Hook] pre-speak: active session ${key}, whitelisted text="${speakText.substring(0, 50)}..."`);
     }
     res.json(result);
     return;
@@ -781,52 +783,63 @@ app.delete('/api/utterances', (_req: Request, res: Response) => {
 });
 
 // Server-Sent Events for TTS notifications
-const ttsClients = new Set<Response>();
+// Map from client response to the session key it's viewing (null = active session)
+const ttsClients = new Map<Response, string | null>();
 
-app.get('/api/tts-events', (_req: Request, res: Response) => {
+app.get('/api/tts-events', (req: Request, res: Response) => {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
   });
 
+  // Tag connection with the session it wants to watch (default: active session)
+  const sessionKey = (req.query.session as string) || null;
+
   // Send initial connection message
   res.write('data: {"type":"connected"}\n\n');
 
-  // Add client to set
-  ttsClients.add(res);
+  // Add client to map
+  ttsClients.set(res, sessionKey);
+  debugLog(`[SSE] Browser connected, watching session=${sessionKey || 'active'}, ${ttsClients.size} client(s) total`);
 
   // Remove client on disconnect
   res.on('close', () => {
+    const disconnectedSessionKey = ttsClients.get(res);
     ttsClients.delete(res);
-    
+
     // If no clients remain, disable voice features
     if (ttsClients.size === 0) {
-      debugLog('[SSE] Last browser disconnected, disabling voice features');
+      debugLog(`[SSE] Last browser disconnected (was watching session=${disconnectedSessionKey || 'active'}), disabling voice features`);
       if (voicePreferences.voiceInputActive || voicePreferences.voiceResponsesEnabled) {
         debugLog(`[SSE] Voice features disabled - Input: ${voicePreferences.voiceInputActive} -> false, Responses: ${voicePreferences.voiceResponsesEnabled} -> false`);
         voicePreferences.voiceInputActive = false;
         voicePreferences.voiceResponsesEnabled = false;
       }
     } else {
-      debugLog(`[SSE] Browser disconnected, ${ttsClients.size} client(s) remaining`);
+      debugLog(`[SSE] Browser disconnected (was watching session=${disconnectedSessionKey || 'active'}), ${ttsClients.size} client(s) remaining`);
     }
   });
 });
 
-// Helper function to notify all connected TTS clients
+// Helper function to notify TTS clients viewing the active session
 function notifyTTSClients(text: string) {
-  const message = JSON.stringify({ type: 'speak', text });
-  ttsClients.forEach(client => {
-    client.write(`data: ${message}\n\n`);
+  const message = JSON.stringify({ type: 'speak', text, sessionKey: activeCompositeKey });
+  ttsClients.forEach((viewingKey, client) => {
+    // Send to clients watching the active session (null) or explicitly this session
+    if (viewingKey === null || viewingKey === activeCompositeKey) {
+      client.write(`data: ${message}\n\n`);
+    }
   });
 }
 
-// Helper function to notify all connected clients about wait status
+// Helper function to notify clients viewing the active session about wait status
 function notifyWaitStatus(isWaiting: boolean) {
-  const message = JSON.stringify({ type: 'waitStatus', isWaiting });
-  ttsClients.forEach(client => {
-    client.write(`data: ${message}\n\n`);
+  const message = JSON.stringify({ type: 'waitStatus', isWaiting, sessionKey: activeCompositeKey });
+  ttsClients.forEach((viewingKey, client) => {
+    if (viewingKey === null || viewingKey === activeCompositeKey) {
+      client.write(`data: ${message}\n\n`);
+    }
   });
 }
 
