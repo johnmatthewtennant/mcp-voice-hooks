@@ -14,6 +14,12 @@ Voice recognition and text-to-speech are handled by the browser, so there is not
 
 [![Demo Video](https://img.youtube.com/vi/GbDatJtm8_k/0.jpg)](https://youtu.be/GbDatJtm8_k)
 
+## Requirements
+
+- Claude Code 2.1.69 or later (run `claude --version` to check)
+- macOS (for system text-to-speech)
+- Chrome or Safari (for speech recognition)
+
 ## Installation
 
 Installation is easy.
