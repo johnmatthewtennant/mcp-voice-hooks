@@ -621,7 +621,7 @@
         .session-sidebar {
             width: 240px;
             background: #FAFAFA;
-            border-left: 1px solid #E0E0E0;
+            border-right: 1px solid #E0E0E0;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -631,7 +631,7 @@
         .session-sidebar.collapsed {
             width: 0;
             min-width: 0;
-            border-left: none;
+            border-right: none;
         }
 
         .sidebar-header {
@@ -864,17 +864,17 @@
             .session-sidebar {
                 width: 0;
                 min-width: 0;
-                border-left: none;
+                border-right: none;
             }
             .session-sidebar:not(.collapsed) {
                 position: absolute;
-                right: 0;
+                left: 0;
                 top: 0;
                 bottom: 0;
                 width: 240px;
                 z-index: 100;
-                border-left: 1px solid #E0E0E0;
-                box-shadow: -2px 0 8px rgba(0,0,0,0.1);
+                border-right: 1px solid #E0E0E0;
+                box-shadow: 2px 0 8px rgba(0,0,0,0.1);
             }
         }
 
@@ -918,8 +918,28 @@
             </div>
         </div>
 
-        <!-- Body with main content and sidebar -->
+        <!-- Body with sidebar and main content -->
         <div class="app-body">
+        <!-- Session Sidebar -->
+        <div id="sessionSidebar" class="session-sidebar collapsed">
+            <div class="sidebar-header">
+                <h3>Sessions</h3>
+                <button id="sidebarCloseBtn" class="sidebar-toggle-btn" title="Hide sessions">&#x2715;</button>
+            </div>
+            <div class="background-enforcement-control" id="backgroundEnforcementControl">
+                <span class="background-enforcement-label">Force background agents to send messages</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="backgroundEnforcementToggle">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div id="sessionList" class="session-list">
+                <div style="padding: 16px; color: #999; font-size: 13px; text-align: center;">
+                    No sessions connected
+                </div>
+            </div>
+        </div>
+
         <!-- Main Content -->
         <div class="main-content">
             <!-- Conversation Section -->
@@ -1031,25 +1051,6 @@
             </div>
         </div>
 
-        <!-- Session Sidebar -->
-        <div id="sessionSidebar" class="session-sidebar collapsed">
-            <div class="sidebar-header">
-                <h3>Sessions</h3>
-                <button id="sidebarCloseBtn" class="sidebar-toggle-btn" title="Hide sessions">&#x2715;</button>
-            </div>
-            <div class="background-enforcement-control" id="backgroundEnforcementControl">
-                <span class="background-enforcement-label">Force background agents to send messages</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="backgroundEnforcementToggle">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <div id="sessionList" class="session-list">
-                <div style="padding: 16px; color: #999; font-size: 13px; text-align: center;">
-                    No sessions connected
-                </div>
-            </div>
-        </div>
         </div> <!-- end app-body -->
     </div>
 
