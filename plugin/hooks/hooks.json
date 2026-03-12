@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); if echo \"$INPUT\" | grep -q '\"agent_id\":\"'; then echo '{\"decision\":\"approve\"}'; exit 0; fi; curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" -H 'Content-Type: application/json' -d \"$INPUT\" || echo '{}'"
+            "command": "INPUT=$(cat); curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/stop\" -H 'Content-Type: application/json' -d \"$INPUT\" || echo '{}'"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); if echo \"$INPUT\" | grep -q '\"agent_id\":\"'; then echo '{\"decision\":\"block\",\"reason\":\"Voice responses are not available for sub-agents.\"}'; exit 0; fi; curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-speak\" -H 'Content-Type: application/json' -d \"$INPUT\" || echo '{}'"
+            "command": "INPUT=$(cat); curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/pre-speak\" -H 'Content-Type: application/json' -d \"$INPUT\" || echo '{}'"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); if echo \"$INPUT\" | grep -q '\"agent_id\":\"'; then echo '{\"decision\":\"approve\"}'; exit 0; fi; curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/post-tool\" -H 'Content-Type: application/json' -d \"$INPUT\" || echo '{}'"
+            "command": "INPUT=$(cat); curl -s -X POST \"http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/post-tool\" -H 'Content-Type: application/json' -d \"$INPUT\" || echo '{}'"
           }
         ]
       }

@@ -117,6 +117,11 @@ interface VoicePreferences {
   voiceInputActive: boolean;
 }
 
+// Composite key helper
+function compositeKey(sessionId: string, agentId?: string | null): string {
+  return JSON.stringify([sessionId, agentId || 'main']);
+}
+
 /**
  * TestServer provides a real HTTP server for integration testing.
  * It mimics the core functionality of unified-server.ts but with isolated state.
@@ -130,6 +135,11 @@ export class TestServer {
   private lastSpeakTimestamp: Date | null = null;
   public port: number = 0;
   public url: string = '';
+
+  // Multi-session state
+  public activeCompositeKey: string | null = null;
+  public speakWhitelist = new Map<string, { count: number; expiry: number }>();
+  private whitelistTTL = 5000;
 
   constructor() {
     this.app = express();
@@ -146,6 +156,54 @@ export class TestServer {
   private setupMiddleware(): void {
     this.app.use(cors());
     this.app.use(express.json());
+  }
+
+  private parseCompositeKey(body: any): { key: string; sessionId: string; agentId: string | null } {
+    const sessionId = body?.session_id || 'default';
+    const agentId = body?.agent_id || null;
+    const key = compositeKey(sessionId, agentId);
+    return { key, sessionId, agentId };
+  }
+
+  private isActiveKey(key: string): boolean {
+    if (this.activeCompositeKey === null) {
+      this.activeCompositeKey = key;
+      return true;
+    }
+    return key === this.activeCompositeKey;
+  }
+
+  private addToWhitelist(text: string): void {
+    const existing = this.speakWhitelist.get(text);
+    const expiry = Date.now() + this.whitelistTTL;
+    if (existing) {
+      existing.count++;
+      existing.expiry = expiry;
+    } else {
+      this.speakWhitelist.set(text, { count: 1, expiry });
+    }
+  }
+
+  private checkWhitelist(text: string): boolean {
+    this.cleanupWhitelist();
+    const entry = this.speakWhitelist.get(text);
+    if (entry && entry.count > 0) {
+      entry.count--;
+      if (entry.count === 0) {
+        this.speakWhitelist.delete(text);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private cleanupWhitelist(): void {
+    const now = Date.now();
+    for (const [text, entry] of this.speakWhitelist) {
+      if (entry.expiry < now) {
+        this.speakWhitelist.delete(text);
+      }
+    }
   }
 
   private setupRoutes(): void {
@@ -300,6 +358,15 @@ export class TestServer {
         res.status(400).json({
           error: 'Voice responses are disabled',
           message: 'Cannot speak when voice responses are disabled'
+        });
+        return;
+      }
+
+      // Check whitelist if multi-session is active
+      if (this.activeCompositeKey !== null && !this.checkWhitelist(text)) {
+        res.status(403).json({
+          error: 'Speak not authorized',
+          message: 'This text was not approved by the pre-speak hook for the active session'
         });
         return;
       }
@@ -459,7 +526,15 @@ export class TestServer {
     });
 
     // Hook endpoints for testing
-    this.app.post('/api/hooks/stop', (_req, res) => {
+    this.app.post('/api/hooks/stop', (req, res) => {
+      const { key } = this.parseCompositeKey(req.body);
+
+      // Only route voice for active session
+      if (!this.isActiveKey(key)) {
+        res.json({ decision: 'approve' });
+        return;
+      }
+
       // Check for pending utterances
       const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
       if (pendingUtterances.length > 0) {
@@ -486,22 +561,50 @@ export class TestServer {
     });
 
     // Pre-speak hook
-    this.app.post('/api/hooks/pre-speak', (_req, res) => {
-      // Check for pending utterances
-      const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
-      if (pendingUtterances.length > 0) {
-        res.json({
-          decision: 'block',
-          reason: `There are ${pendingUtterances.length} pending utterances. Please dequeue them before speaking.`
-        });
+    this.app.post('/api/hooks/pre-speak', (req, res) => {
+      const { key } = this.parseCompositeKey(req.body);
+      const speakText = req.body?.tool_input?.text;
+
+      // Active session: check for pending utterances, whitelist text
+      if (this.isActiveKey(key)) {
+        const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
+        if (pendingUtterances.length > 0) {
+          res.json({
+            decision: 'block',
+            reason: `There are ${pendingUtterances.length} pending utterances. Please dequeue them before speaking.`
+          });
+          return;
+        }
+
+        // Whitelist the text for the speak endpoint
+        if (speakText) {
+          this.addToWhitelist(speakText);
+        }
+
+        res.json({ decision: 'approve' });
         return;
       }
 
-      res.json({ decision: 'approve' });
+      // Inactive session: store in conversation history, block
+      if (speakText) {
+        this.queue.addAssistantMessage(speakText);
+      }
+      res.json({
+        decision: 'block',
+        reason: 'Voice output is routed to the active session only. Your message has been stored in conversation history.'
+      });
     });
 
     // Post-tool hook
-    this.app.post('/api/hooks/post-tool', (_req, res) => {
+    this.app.post('/api/hooks/post-tool', (req, res) => {
+      const { key } = this.parseCompositeKey(req.body);
+
+      // Only route voice for active session
+      if (!this.isActiveKey(key)) {
+        res.json({ decision: 'approve' });
+        return;
+      }
+
       // Check for pending utterances and dequeue
       const pendingUtterances = this.queue.utterances.filter(u => u.status === 'pending');
       if (pendingUtterances.length > 0) {
@@ -587,5 +690,7 @@ export class TestServer {
     };
     this.lastToolUseTimestamp = null;
     this.lastSpeakTimestamp = null;
+    this.activeCompositeKey = null;
+    this.speakWhitelist.clear();
   }
 }

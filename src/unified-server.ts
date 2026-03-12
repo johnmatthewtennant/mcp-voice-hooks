@@ -156,6 +156,61 @@ let voicePreferences = {
   voiceInputActive: false
 };
 
+// Multi-session state
+// Composite key encoding: JSON.stringify([sessionId, agentId || "main"])
+function compositeKey(sessionId: string, agentId?: string | null): string {
+  return JSON.stringify([sessionId, agentId || 'main']);
+}
+
+// The first session_id seen becomes the active key by default
+let activeCompositeKey: string | null = null;
+
+// Pre-speak text whitelist: text → { count, expiry }
+// When pre-speak hook approves a speak for the active session, it adds the text here.
+// The /api/speak endpoint checks this whitelist to verify the speak is authorized.
+const speakWhitelist = new Map<string, { count: number; expiry: number }>();
+
+const WHITELIST_TTL_MS = 5000; // 5 second TTL for whitelist entries
+
+function addToWhitelist(text: string): void {
+  const existing = speakWhitelist.get(text);
+  const expiry = Date.now() + WHITELIST_TTL_MS;
+  if (existing) {
+    existing.count++;
+    existing.expiry = expiry;
+  } else {
+    speakWhitelist.set(text, { count: 1, expiry });
+  }
+  debugLog(`[Whitelist] Added "${text.substring(0, 50)}..." count=${speakWhitelist.get(text)!.count}`);
+}
+
+function checkWhitelist(text: string): boolean {
+  cleanupWhitelist();
+  const entry = speakWhitelist.get(text);
+  if (entry && entry.count > 0) {
+    entry.count--;
+    if (entry.count === 0) {
+      speakWhitelist.delete(text);
+    }
+    debugLog(`[Whitelist] Consumed "${text.substring(0, 50)}..." remaining=${entry.count}`);
+    return true;
+  }
+  return false;
+}
+
+function cleanupWhitelist(): void {
+  const now = Date.now();
+  for (const [text, entry] of speakWhitelist) {
+    if (entry.expiry < now) {
+      speakWhitelist.delete(text);
+      debugLog(`[Whitelist] Expired "${text.substring(0, 50)}..."`);
+    }
+  }
+}
+
+// Run whitelist cleanup every 5 seconds
+setInterval(cleanupWhitelist, WHITELIST_TTL_MS);
+
 // HTTP Server Setup (always created)
 const app = express();
 app.use(cors());
@@ -529,21 +584,45 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   return { decision: 'approve' };
 }
 
+// Parse composite key from hook request body
+function parseCompositeKey(req: Request): { key: string; sessionId: string; agentId: string | null } {
+  const sessionId = req.body?.session_id || 'default';
+  const agentId = req.body?.agent_id || null;
+  const key = compositeKey(sessionId, agentId);
+  return { key, sessionId, agentId };
+}
+
+// Check if a composite key is the active session
+function isActiveKey(key: string): boolean {
+  // First session seen becomes active by default
+  if (activeCompositeKey === null) {
+    activeCompositeKey = key;
+    debugLog(`[Session] First session registered as active: ${key}`);
+    return true;
+  }
+  return key === activeCompositeKey;
+}
+
 // Log hook request body for debugging
 function logHookRequest(req: Request, endpoint: string): void {
-  const agentId = req.body?.agent_id;
-  const agentType = req.body?.agent_type;
+  const { key, sessionId, agentId } = parseCompositeKey(req);
   const toolName = req.body?.tool_name;
-  if (agentId) {
-    debugLog(`[WARNING] Sub-agent request reached server (${endpoint}): agent_id=${agentId} agent_type=${agentType} — hooks should have intercepted this`);
-  } else {
-    debugLog(`[Hook] ${endpoint}: tool=${toolName || 'n/a'} session=${req.body?.session_id || 'n/a'}`);
-  }
+  const active = isActiveKey(key) ? 'active' : 'inactive';
+  debugLog(`[Hook] ${endpoint}: tool=${toolName || 'n/a'} session=${sessionId} agent=${agentId || 'main'} key=${key} (${active})`);
 }
 
 // Dedicated hook endpoints that return in Claude's expected format
 app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   logHookRequest(req, 'stop');
+  const { key } = parseCompositeKey(req);
+
+  // Only route voice for active session
+  if (!isActiveKey(key)) {
+    debugLog(`[Hook] stop: inactive session ${key}, approving immediately`);
+    res.json({ decision: 'approve' });
+    return;
+  }
+
   const result = await handleHookRequest('stop');
   res.json(result);
 });
@@ -551,13 +630,44 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
 // Pre-speak hook endpoint
 app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
   logHookRequest(req, 'pre-speak');
-  const result = handleHookRequest('speak');
-  res.json(result);
+  const { key } = parseCompositeKey(req);
+  const toolInput = req.body?.tool_input;
+  const speakText = toolInput?.text;
+
+  // Active session: approve and whitelist the text
+  if (isActiveKey(key)) {
+    const result = handleHookRequest('speak');
+    // If approved and we have text, add to whitelist
+    if (speakText && (result as any).decision !== 'block') {
+      addToWhitelist(speakText);
+    }
+    res.json(result);
+    return;
+  }
+
+  // Inactive session: store in conversation history, block the speak
+  if (speakText) {
+    queue.addAssistantMessage(speakText);
+    debugLog(`[Hook] pre-speak: inactive session ${key}, stored text in history, blocking speak`);
+  }
+  res.json({
+    decision: 'block',
+    reason: 'Voice output is routed to the active session only. Your message has been stored in conversation history.'
+  });
 });
 
 // Post-tool hook endpoint
 app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
   logHookRequest(req, 'post-tool');
+  const { key } = parseCompositeKey(req);
+
+  // Only route voice for active session
+  if (!isActiveKey(key)) {
+    debugLog(`[Hook] post-tool: inactive session ${key}, approving immediately`);
+    res.json({ decision: 'approve' });
+    return;
+  }
+
   const result = handleHookRequest('post-tool');
   res.json(result);
 });
@@ -698,6 +808,17 @@ app.post('/api/speak', async (req: Request, res: Response) => {
     res.status(400).json({
       error: 'Voice responses are disabled',
       message: 'Cannot speak when voice responses are disabled'
+    });
+    return;
+  }
+
+  // Check whitelist: only speak if text was approved by pre-speak hook
+  // Skip whitelist check if no multi-session is active (single session backward compat)
+  if (activeCompositeKey !== null && !checkWhitelist(text)) {
+    debugLog(`[Speak] Text not in whitelist, rejecting: "${text.substring(0, 50)}..."`);
+    res.status(403).json({
+      error: 'Speak not authorized',
+      message: 'This text was not approved by the pre-speak hook for the active session'
     });
     return;
   }
