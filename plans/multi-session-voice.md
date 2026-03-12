@@ -186,12 +186,13 @@ function notifySessionClients(sessionId: string, event: any) {
   - Sub-agents (have agent_id) indent under their parent session
   - Each labeled by agent_type (e.g., "main", "Explore", "researcher")
 - Teammates (different session_id) are top-level entries
-- Switching sessions changes active composite key
-- Conversation history shows inline:
-  - Main agent messages at normal indent
-  - Sub-agent messages indented under the parent, tagged with agent_type
+- Session list lives in a **collapsible right sidebar** (hide/show toggle)
+  - Keeps the main conversation area clean
+  - Sidebar shows session tree: sorted by key, indented if agent_id present
+- Clicking a session switches the active composite key
+- Main conversation area shows the selected session's history
 - SSE scoped to active session
-- Unread message indicators (badge on inactive sessions)
+- Unread message indicators (badge on inactive sessions in sidebar)
 
 ## Open Questions
 
