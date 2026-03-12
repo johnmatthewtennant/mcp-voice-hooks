@@ -145,11 +145,6 @@ class UtteranceQueue {
 // Determine if we're running in MCP-managed mode
 const IS_MCP_MANAGED = process.argv.includes('--mcp-managed');
 
-// Global state
-const queue = new UtteranceQueue();
-let lastToolUseTimestamp: Date | null = null;
-let lastSpeakTimestamp: Date | null = null;
-
 // Voice preferences (controlled by browser)
 let voicePreferences = {
   voiceResponsesEnabled: false,
@@ -162,12 +157,73 @@ function compositeKey(sessionId: string, agentId?: string | null): string {
   return JSON.stringify([sessionId, agentId || 'main']);
 }
 
-// The first session_id seen becomes the active key by default
+// Per-session state
+interface SessionState {
+  key: string;
+  sessionId: string;
+  agentId: string | null;
+  agentType: string | null;
+  queue: UtteranceQueue;
+  lastToolUseTimestamp: Date | null;
+  lastSpeakTimestamp: Date | null;
+  lastActivity: Date;
+}
+
+const sessions = new Map<string, SessionState>();
 let activeCompositeKey: string | null = null;
 
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minute TTL
+
+function getOrCreateSession(key: string, sessionId?: string, agentId?: string | null, agentType?: string | null): SessionState {
+  let session = sessions.get(key);
+  if (!session) {
+    session = {
+      key,
+      sessionId: sessionId || 'default',
+      agentId: agentId || null,
+      agentType: agentType || null,
+      queue: new UtteranceQueue(),
+      lastToolUseTimestamp: null,
+      lastSpeakTimestamp: null,
+      lastActivity: new Date(),
+    };
+    sessions.set(key, session);
+    debugLog(`[Session] Created new session: ${key}`);
+  }
+  session.lastActivity = new Date();
+  return session;
+}
+
+function getActiveSession(): SessionState {
+  if (activeCompositeKey) {
+    const session = sessions.get(activeCompositeKey);
+    if (session) return session;
+  }
+  // Fallback: create/get default session
+  const defaultKey = compositeKey('default');
+  if (!activeCompositeKey) {
+    activeCompositeKey = defaultKey;
+  }
+  return getOrCreateSession(defaultKey);
+}
+
+// Session TTL cleanup
+function cleanupSessions(): void {
+  const now = Date.now();
+  for (const [key, session] of sessions) {
+    if (now - session.lastActivity.getTime() > SESSION_TTL_MS) {
+      sessions.delete(key);
+      debugLog(`[Session] Expired inactive session: ${key}`);
+    }
+  }
+}
+
+// Run session cleanup every 5 minutes
+setInterval(cleanupSessions, 5 * 60 * 1000);
+
 // Pre-speak text whitelist: text → { count, expiry }
-// When pre-speak hook approves a speak for the active session, it adds the text here.
-// The /api/speak endpoint checks this whitelist to verify the speak is authorized.
+// Global because MCP speak calls arrive without session identity.
+// The pre-speak hook (which has identity) bridges this gap.
 const speakWhitelist = new Map<string, { count: number; expiry: number }>();
 
 const WHITELIST_TTL_MS = 5000; // 5 second TTL for whitelist entries
@@ -226,8 +282,9 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
     return;
   }
 
+  const session = getActiveSession();
   const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
-  const utterance = queue.add(text, parsedTimestamp);
+  const utterance = session.queue.add(text, parsedTimestamp);
   res.json({
     success: true,
     utterance: {
@@ -241,7 +298,8 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
 
 app.get('/api/utterances', (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 10;
-  const utterances = queue.getRecent(limit);
+  const session = getActiveSession();
+  const utterances = session.queue.getRecent(limit);
 
   res.json({
     utterances: utterances.map(u => ({
@@ -256,7 +314,8 @@ app.get('/api/utterances', (req: Request, res: Response) => {
 // GET /api/conversation - Returns full conversation history
 app.get('/api/conversation', (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 50;
-  const messages = queue.getRecentMessages(limit);
+  const session = getActiveSession();
+  const messages = session.queue.getRecentMessages(limit);
 
   res.json({
     messages: messages.map(m => ({
@@ -270,9 +329,10 @@ app.get('/api/conversation', (req: Request, res: Response) => {
 });
 
 app.get('/api/utterances/status', (_req: Request, res: Response) => {
-  const total = queue.utterances.length;
-  const pending = queue.utterances.filter(u => u.status === 'pending').length;
-  const delivered = queue.utterances.filter(u => u.status === 'delivered').length;
+  const session = getActiveSession();
+  const total = session.queue.utterances.length;
+  const pending = session.queue.utterances.filter(u => u.status === 'pending').length;
+  const delivered = session.queue.utterances.filter(u => u.status === 'delivered').length;
 
   res.json({
     total,
@@ -282,16 +342,17 @@ app.get('/api/utterances/status', (_req: Request, res: Response) => {
 });
 
 // Shared dequeue logic
-function dequeueUtterancesCore() {
+function dequeueUtterancesCore(session?: SessionState) {
+  const s = session || getActiveSession();
   // Always dequeue pending utterances regardless of voiceInputActive
   // This allows both typed and spoken messages to be dequeued
-  const pendingUtterances = queue.utterances
+  const pendingUtterances = s.queue.utterances
     .filter(u => u.status === 'pending')
     .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
   // Mark as delivered
   pendingUtterances.forEach(u => {
-    queue.markDelivered(u.id);
+    s.queue.markDelivered(u.id);
   });
 
   return {
@@ -310,7 +371,9 @@ app.post('/api/dequeue-utterances', (_req: Request, res: Response) => {
 });
 
 // Shared wait for utterance logic
-async function waitForUtteranceCore() {
+async function waitForUtteranceCore(session?: SessionState) {
+  const s = session || getActiveSession();
+
   // Check if voice input is active
   if (!voicePreferences.voiceInputActive) {
     return {
@@ -323,7 +386,7 @@ async function waitForUtteranceCore() {
   const maxWaitMs = secondsToWait * 1000;
   const startTime = Date.now();
 
-  debugLog(`[WaitCore] Starting wait_for_utterance (${secondsToWait}s)`);
+  debugLog(`[WaitCore] Starting wait_for_utterance (${secondsToWait}s) session=${s.key}`);
 
   // Notify frontend that wait has started
   notifyWaitStatus(true);
@@ -344,7 +407,7 @@ async function waitForUtteranceCore() {
       };
     }
 
-    const pendingUtterances = queue.utterances.filter(
+    const pendingUtterances = s.queue.utterances.filter(
       u => u.status === 'pending'
     );
 
@@ -357,7 +420,7 @@ async function waitForUtteranceCore() {
 
       // Mark utterances as delivered
       sortedUtterances.forEach(u => {
-        queue.markDelivered(u.id);
+        s.queue.markDelivered(u.id);
       });
 
       notifyWaitStatus(false); // Notify wait has ended
@@ -410,7 +473,8 @@ app.post('/api/wait-for-utterances', async (_req: Request, res: Response) => {
 
 // API for pre-tool hook to check for pending utterances
 app.get('/api/has-pending-utterances', (_req: Request, res: Response) => {
-  const pendingCount = queue.utterances.filter(u => u.status === 'pending').length;
+  const session = getActiveSession();
+  const pendingCount = session.queue.utterances.filter(u => u.status === 'pending').length;
   const hasPending = pendingCount > 0;
 
   res.json({
@@ -423,6 +487,7 @@ app.get('/api/has-pending-utterances', (_req: Request, res: Response) => {
 app.post('/api/validate-action', (req: Request, res: Response) => {
   const { action } = req.body;
   const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
+  const session = getActiveSession();
 
   if (!action || !['tool-use', 'stop'].includes(action)) {
     res.status(400).json({ error: 'Invalid action. Must be "tool-use" or "stop"' });
@@ -431,7 +496,7 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 
   // Only check for pending utterances if voice input is active
   if (voicePreferences.voiceInputActive) {
-    const pendingUtterances = queue.utterances.filter(u => u.status === 'pending');
+    const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
     if (pendingUtterances.length > 0) {
       res.json({
         allowed: false,
@@ -444,7 +509,7 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 
   // Check for delivered but unresponded utterances (when voice enabled)
   if (voiceResponsesEnabled) {
-    const deliveredUtterances = queue.utterances.filter(u => u.status === 'delivered');
+    const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
     if (deliveredUtterances.length > 0) {
       res.json({
         allowed: false,
@@ -457,7 +522,7 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 
   // For stop action, check if we should wait (only if voice input is active)
   if (action === 'stop' && voicePreferences.voiceInputActive) {
-    if (queue.utterances.length > 0) {
+    if (session.queue.utterances.length > 0) {
       res.json({
         allowed: false,
         requiredAction: 'wait_for_utterance',
@@ -474,17 +539,18 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 });
 
 // Unified hook handler
-function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool'): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
+function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool', session?: SessionState): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
+  const s = session || getActiveSession();
   const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
   const voiceInputActive = voicePreferences.voiceInputActive;
 
   // 1. Check for pending utterances and auto-dequeue
   // Always check for pending utterances regardless of voiceInputActive
   // This allows typed messages to be dequeued even when mic is off
-  const pendingUtterances = queue.utterances.filter(u => u.status === 'pending');
+  const pendingUtterances = s.queue.utterances.filter(u => u.status === 'pending');
   if (pendingUtterances.length > 0) {
     // Always dequeue (dequeueUtterancesCore no longer requires voiceInputActive)
-    const dequeueResult = dequeueUtterancesCore();
+    const dequeueResult = dequeueUtterancesCore(s);
 
     if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
       // Reverse to show oldest first
@@ -499,7 +565,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
 
   // 2. Check for delivered utterances (when voice enabled)
   if (voiceResponsesEnabled) {
-    const deliveredUtterances = queue.utterances.filter(u => u.status === 'delivered');
+    const deliveredUtterances = s.queue.utterances.filter(u => u.status === 'delivered');
     if (deliveredUtterances.length > 0) {
       // Only allow speak to proceed
       if (attemptedAction === 'speak') {
@@ -514,7 +580,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
 
   // 3. Handle tool and post-tool actions
   if (attemptedAction === 'tool' || attemptedAction === 'post-tool') {
-    lastToolUseTimestamp = new Date();
+    s.lastToolUseTimestamp = new Date();
     return { decision: 'approve' };
   }
 
@@ -526,8 +592,8 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   // 5. Handle stop
   if (attemptedAction === 'stop') {
     // Check if must speak after tool use
-    if (voiceResponsesEnabled && lastToolUseTimestamp &&
-      (!lastSpeakTimestamp || lastSpeakTimestamp < lastToolUseTimestamp)) {
+    if (voiceResponsesEnabled && s.lastToolUseTimestamp &&
+      (!s.lastSpeakTimestamp || s.lastSpeakTimestamp < s.lastToolUseTimestamp)) {
       return {
         decision: 'block',
         reason: 'Assistant must speak after using tools. Please use the speak tool to respond before proceeding.'
@@ -539,7 +605,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
       return (async () => {
         try {
           debugLog(`[Stop Hook] Auto-calling wait_for_utterance...`);
-          const data = await waitForUtteranceCore();
+          const data = await waitForUtteranceCore(s);
           debugLog(`[Stop Hook] wait_for_utterance response: ${JSON.stringify(data)}`);
 
           // If error (voice input not active), treat as no utterances found
@@ -584,12 +650,14 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   return { decision: 'approve' };
 }
 
-// Parse composite key from hook request body
-function parseCompositeKey(req: Request): { key: string; sessionId: string; agentId: string | null } {
+// Parse composite key from hook request body and get/create session
+function parseHookRequest(req: Request): { key: string; sessionId: string; agentId: string | null; session: SessionState } {
   const sessionId = req.body?.session_id || 'default';
   const agentId = req.body?.agent_id || null;
+  const agentType = req.body?.agent_type || null;
   const key = compositeKey(sessionId, agentId);
-  return { key, sessionId, agentId };
+  const session = getOrCreateSession(key, sessionId, agentId, agentType);
+  return { key, sessionId, agentId, session };
 }
 
 // Check if a composite key is the active session
@@ -605,7 +673,9 @@ function isActiveKey(key: string): boolean {
 
 // Log hook request body for debugging
 function logHookRequest(req: Request, endpoint: string): void {
-  const { key, sessionId, agentId } = parseCompositeKey(req);
+  const sessionId = req.body?.session_id || 'default';
+  const agentId = req.body?.agent_id || null;
+  const key = compositeKey(sessionId, agentId);
   const toolName = req.body?.tool_name;
   const active = isActiveKey(key) ? 'active' : 'inactive';
   debugLog(`[Hook] ${endpoint}: tool=${toolName || 'n/a'} session=${sessionId} agent=${agentId || 'main'} key=${key} (${active})`);
@@ -614,7 +684,7 @@ function logHookRequest(req: Request, endpoint: string): void {
 // Dedicated hook endpoints that return in Claude's expected format
 app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   logHookRequest(req, 'stop');
-  const { key } = parseCompositeKey(req);
+  const { key, session } = parseHookRequest(req);
 
   // Only route voice for active session
   if (!isActiveKey(key)) {
@@ -623,20 +693,20 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
     return;
   }
 
-  const result = await handleHookRequest('stop');
+  const result = await handleHookRequest('stop', session);
   res.json(result);
 });
 
 // Pre-speak hook endpoint
 app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
   logHookRequest(req, 'pre-speak');
-  const { key } = parseCompositeKey(req);
+  const { key, session } = parseHookRequest(req);
   const toolInput = req.body?.tool_input;
   const speakText = toolInput?.text;
 
   // Active session: approve and whitelist the text
   if (isActiveKey(key)) {
-    const result = handleHookRequest('speak');
+    const result = handleHookRequest('speak', session);
     // If approved and we have text, add to whitelist
     if (speakText && (result as any).decision !== 'block') {
       addToWhitelist(speakText);
@@ -645,9 +715,9 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
     return;
   }
 
-  // Inactive session: store in conversation history, block the speak
+  // Inactive session: store in that session's conversation history, block the speak
   if (speakText) {
-    queue.addAssistantMessage(speakText);
+    session.queue.addAssistantMessage(speakText);
     debugLog(`[Hook] pre-speak: inactive session ${key}, stored text in history, blocking speak`);
   }
   res.json({
@@ -659,7 +729,7 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
 // Post-tool hook endpoint
 app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
   logHookRequest(req, 'post-tool');
-  const { key } = parseCompositeKey(req);
+  const { key, session } = parseHookRequest(req);
 
   // Only route voice for active session
   if (!isActiveKey(key)) {
@@ -668,7 +738,7 @@ app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
     return;
   }
 
-  const result = handleHookRequest('post-tool');
+  const result = handleHookRequest('post-tool', session);
   res.json(result);
 });
 
@@ -676,8 +746,8 @@ app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
 // Delete specific utterance by ID
 app.delete('/api/utterances/:id', (req: Request, res: Response) => {
   const { id } = req.params;
-
-  const deleted = queue.delete(id);
+  const session = getActiveSession();
+  const deleted = session.queue.delete(id);
 
   if (deleted) {
     res.json({
@@ -694,8 +764,9 @@ app.delete('/api/utterances/:id', (req: Request, res: Response) => {
 
 // Delete all utterances
 app.delete('/api/utterances', (_req: Request, res: Response) => {
-  const clearedCount = queue.utterances.length;
-  queue.clear();
+  const session = getActiveSession();
+  const clearedCount = session.queue.utterances.length;
+  session.queue.clear();
 
   res.json({
     success: true,
@@ -793,6 +864,43 @@ app.post('/api/voice-input-state', (req: Request, res: Response) => {
   });
 });
 
+// API for session management
+app.get('/api/sessions', (_req: Request, res: Response) => {
+  const sessionList = Array.from(sessions.values()).map(s => ({
+    key: s.key,
+    sessionId: s.sessionId,
+    agentId: s.agentId,
+    agentType: s.agentType,
+    isActive: s.key === activeCompositeKey,
+    lastActivity: s.lastActivity,
+    utteranceCount: s.queue.utterances.length,
+    pendingCount: s.queue.utterances.filter(u => u.status === 'pending').length,
+  }));
+
+  res.json({
+    sessions: sessionList,
+    activeKey: activeCompositeKey,
+  });
+});
+
+app.post('/api/active-session', (req: Request, res: Response) => {
+  const { key } = req.body;
+
+  if (!key || !sessions.has(key)) {
+    res.status(400).json({ error: 'Invalid session key' });
+    return;
+  }
+
+  const previousKey = activeCompositeKey;
+  activeCompositeKey = key;
+  debugLog(`[Session] Active session switched: ${previousKey} → ${key}`);
+
+  res.json({
+    success: true,
+    activeKey: activeCompositeKey,
+  });
+});
+
 // API for text-to-speech
 app.post('/api/speak', async (req: Request, res: Response) => {
   const { text } = req.body;
@@ -824,6 +932,8 @@ app.post('/api/speak', async (req: Request, res: Response) => {
   }
 
   try {
+    const session = getActiveSession();
+
     // Always notify browser clients - they decide how to speak
     notifyTTSClients(text);
     debugLog(`[Speak] Sent text to browser for TTS: "${text}"`);
@@ -831,22 +941,22 @@ app.post('/api/speak', async (req: Request, res: Response) => {
     // Note: The browser will decide whether to use system voice or browser voice
 
     // Store assistant's response in conversation history
-    queue.addAssistantMessage(text);
+    session.queue.addAssistantMessage(text);
 
     // Mark all delivered utterances as responded
-    const deliveredUtterances = queue.utterances.filter(u => u.status === 'delivered');
+    const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
     deliveredUtterances.forEach(u => {
       u.status = 'responded';
       debugLog(`[Queue] marked as responded: "${u.text}"	[id: ${u.id}]`);
 
       // Sync status in messages array
-      const message = queue.messages.find(m => m.id === u.id && m.role === 'user');
+      const message = session.queue.messages.find(m => m.id === u.id && m.role === 'user');
       if (message) {
         message.status = 'responded';
       }
     });
 
-    lastSpeakTimestamp = new Date();
+    session.lastSpeakTimestamp = new Date();
 
     res.json({
       success: true,
