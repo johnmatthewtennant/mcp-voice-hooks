@@ -2,6 +2,7 @@
 
 import express from 'express';
 import type { Request, Response } from 'express';
+import http from 'http';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -1037,7 +1038,27 @@ app.get('/messenger', (_req: Request, res: Response) => {
 });
 
 // Start HTTP server with EADDRINUSE handling for multi-session support
-const httpServer = app.listen(HTTP_PORT, async () => {
+// Create server and attach error handler BEFORE listen to ensure proper event ordering
+let eaddrinuseDetected = false;
+const httpServer = http.createServer(app);
+
+// Handle EADDRINUSE: another instance already owns the HTTP server.
+// This process will run as MCP shim only, proxying speak calls to the existing server.
+httpServer.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    eaddrinuseDetected = true;
+    const log = IS_MCP_MANAGED ? console.error : console.log;
+    log(`[HTTP] Port ${HTTP_PORT} already in use — another instance owns the HTTP server`);
+    log(`[HTTP] Running as MCP shim only, proxying to http://localhost:${HTTP_PORT}`);
+  } else {
+    // Re-throw unexpected errors
+    throw err;
+  }
+});
+
+httpServer.listen(HTTP_PORT, async () => {
+  if (eaddrinuseDetected) return; // defensive guard
+
   // Log startup info with git hash and timestamp to file for debugging
   const { execSync } = await import('child_process');
   let gitHash = 'unknown';
@@ -1055,6 +1076,7 @@ const httpServer = app.listen(HTTP_PORT, async () => {
   }
 
   // Auto-open browser if no frontend connects within 3 seconds
+  // Skip for secondary instances that detected EADDRINUSE
   const autoOpenBrowser = process.env.MCP_VOICE_HOOKS_AUTO_OPEN_BROWSER !== 'false'; // Default to true
   if (IS_MCP_MANAGED && autoOpenBrowser) {
     setTimeout(async () => {
@@ -1071,19 +1093,6 @@ const httpServer = app.listen(HTTP_PORT, async () => {
         debugLog(`[Browser] Frontend already connected (${ttsClients.size} client(s))`)
       }
     }, 3000);
-  }
-});
-
-// Handle EADDRINUSE: another instance already owns the HTTP server.
-// This process will run as MCP shim only, proxying speak calls to the existing server.
-httpServer.on('error', (err: NodeJS.ErrnoException) => {
-  if (err.code === 'EADDRINUSE') {
-    const log = IS_MCP_MANAGED ? console.error : console.log;
-    log(`[HTTP] Port ${HTTP_PORT} already in use — another instance owns the HTTP server`);
-    log(`[HTTP] Running as MCP shim only, proxying to http://localhost:${HTTP_PORT}`);
-  } else {
-    // Re-throw unexpected errors
-    throw err;
   }
 });
 
