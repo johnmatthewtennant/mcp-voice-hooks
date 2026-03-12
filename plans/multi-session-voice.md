@@ -180,11 +180,18 @@ function notifySessionClients(sessionId: string, event: any) {
 - Non-active sessions get instant approve on all hooks
 
 ### Phase 5: Browser session selector
-- Add session list to UI
-- Session switching changes active composite key
-- Loads that session's conversation history
+- Add session list to UI showing connected sessions
+- Sessions with the same `session_id` are grouped together:
+  - Main agent (no agent_id) is the parent
+  - Sub-agents (have agent_id) indent under their parent session
+  - Each labeled by agent_type (e.g., "main", "Explore", "researcher")
+- Teammates (different session_id) are top-level entries
+- Switching sessions changes active composite key
+- Conversation history shows inline:
+  - Main agent messages at normal indent
+  - Sub-agent messages indented under the parent, tagged with agent_type
 - SSE scoped to active session
-- Unread message indicators
+- Unread message indicators (badge on inactive sessions)
 
 ## Open Questions
 
