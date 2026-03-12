@@ -660,15 +660,17 @@ function parseHookRequest(req: Request): { key: string; sessionId: string; agent
   return { key, sessionId, agentId, session };
 }
 
-// Check if a composite key is the active session
+// Pure check: is this key the active session?
 function isActiveKey(key: string): boolean {
-  // First session seen becomes active by default
+  return activeCompositeKey !== null && key === activeCompositeKey;
+}
+
+// Register the first session seen as active (separated from isActiveKey to avoid side effects)
+function registerIfFirst(key: string): void {
   if (activeCompositeKey === null) {
     activeCompositeKey = key;
     debugLog(`[Session] First session registered as active: ${key}`);
-    return true;
   }
-  return key === activeCompositeKey;
 }
 
 // Log hook request body for debugging
@@ -685,6 +687,7 @@ function logHookRequest(req: Request, endpoint: string): void {
 app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   logHookRequest(req, 'stop');
   const { key, session } = parseHookRequest(req);
+  registerIfFirst(key);
 
   // Only route voice for active session
   if (!isActiveKey(key)) {
@@ -701,6 +704,7 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
 app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
   logHookRequest(req, 'pre-speak');
   const { key, session } = parseHookRequest(req);
+  registerIfFirst(key);
   const toolInput = req.body?.tool_input;
   const speakText = toolInput?.text;
 
@@ -730,6 +734,7 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
 app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
   logHookRequest(req, 'post-tool');
   const { key, session } = parseHookRequest(req);
+  registerIfFirst(key);
 
   // Only route voice for active session
   if (!isActiveKey(key)) {

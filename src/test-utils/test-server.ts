@@ -166,11 +166,13 @@ export class TestServer {
   }
 
   private isActiveKey(key: string): boolean {
+    return this.activeCompositeKey !== null && key === this.activeCompositeKey;
+  }
+
+  private registerIfFirst(key: string): void {
     if (this.activeCompositeKey === null) {
       this.activeCompositeKey = key;
-      return true;
     }
-    return key === this.activeCompositeKey;
   }
 
   private addToWhitelist(text: string): void {
@@ -528,6 +530,7 @@ export class TestServer {
     // Hook endpoints for testing
     this.app.post('/api/hooks/stop', (req, res) => {
       const { key } = this.parseCompositeKey(req.body);
+      this.registerIfFirst(key);
 
       // Only route voice for active session
       if (!this.isActiveKey(key)) {
@@ -563,6 +566,7 @@ export class TestServer {
     // Pre-speak hook
     this.app.post('/api/hooks/pre-speak', (req, res) => {
       const { key } = this.parseCompositeKey(req.body);
+      this.registerIfFirst(key);
       const speakText = req.body?.tool_input?.text;
 
       // Active session: check for pending utterances, whitelist text
@@ -598,6 +602,7 @@ export class TestServer {
     // Post-tool hook
     this.app.post('/api/hooks/post-tool', (req, res) => {
       const { key } = this.parseCompositeKey(req.body);
+      this.registerIfFirst(key);
 
       // Only route voice for active session
       if (!this.isActiveKey(key)) {
