@@ -157,6 +157,17 @@ class MessengerClient {
         if (this.sidebarCloseBtn) {
             this.sidebarCloseBtn.addEventListener('click', () => this.toggleSidebar(false));
         }
+        // Delegated click handler on sessionList — survives innerHTML replacement
+        if (this.sessionList) {
+            this.sessionList.addEventListener('click', (e) => {
+                const item = e.target.closest('.session-item');
+                if (!item) return;
+                const key = item.dataset.sessionKey;
+                if (key && key !== this.activeSessionKey) {
+                    this.switchActiveSession(key);
+                }
+            });
+        }
         // Load sessions immediately
         this.loadSessions();
     }
@@ -261,16 +272,6 @@ class MessengerClient {
         }
 
         this.sessionList.innerHTML = html;
-
-        // Add click handlers
-        this.sessionList.querySelectorAll('.session-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const key = item.dataset.sessionKey;
-                if (key && key !== this.activeSessionKey) {
-                    this.switchActiveSession(key);
-                }
-            });
-        });
     }
 
     formatSessionLabel(sessionId) {
