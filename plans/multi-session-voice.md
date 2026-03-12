@@ -45,25 +45,27 @@ Hooks read the stdin JSON and pass `session_id`, `agent_id`, and `agent_type` to
   - If this agent's session is active in the UI → route voice
   - Otherwise → instant approve, no dequeue
 
-### Hook Changes
+### Hook Changes (implemented)
 
-Current hooks are fire-and-forget curl commands that don't read stdin. They need to be updated to:
+Hooks read stdin and pass the full JSON (including agent_id) to the server:
+- **PostToolUse & Stop**: if agent_id present, return instant approve (skip voice routing)
+- **PreToolUse (speak)**: ALWAYS pass through to server — even for sub-agents
 
-1. Read the JSON from stdin
-2. Pass it to the server as the POST body (it already contains session_id, agent_id, agent_type)
+### Pre-Speak Approval Pattern (new)
 
-```bash
-# Current (broken for multi-agent):
-curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/post-tool" || echo '{}'
+The pre-speak hook receives agent_id. The MCP speak call arrives separately without agent identity (shared stdio connection). We bridge this gap with a simple approval flag:
 
-# Updated (passes agent identity):
-INPUT=$(cat)
-curl -s -X POST "http://localhost:${MCP_VOICE_HOOKS_PORT:-5111}/api/hooks/post-tool" \
-  -H "Content-Type: application/json" \
-  -d "$INPUT" || echo '{}'
-```
+1. **Pre-speak hook fires** → sends full JSON to server (includes agent_id)
+2. **Server receives pre-speak request**:
+   - If agent is **active** (or no agent_id = main agent): set approval flag, return approve
+   - If agent is **inactive**: don't set flag, return approve (hook still allows, but MCP call will be rejected)
+3. **MCP speak call arrives** (no agent identity):
+   - If approval flag is set → play TTS, clear flag, store in conversation history
+   - If no flag → reject (came from non-active agent)
 
-The server now knows exactly who is calling and can route accordingly.
+No text matching needed — just a boolean flag with a short TTL. The conversation history is built from whatever the MCP speak call sends.
+
+This solves the shared MCP connection problem without needing per-agent MCP sessions.
 
 ### Per-Session State
 
