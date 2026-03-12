@@ -529,20 +529,31 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   return { decision: 'approve' };
 }
 
+// Log if a sub-agent request reaches the server (hooks should have caught it)
+function logSubagentIfPresent(req: Request, endpoint: string): void {
+  const agentId = req.body?.agent_id;
+  if (agentId) {
+    debugLog(`[WARNING] Sub-agent request reached server (${endpoint}): agent_id=${agentId} agent_type=${req.body?.agent_type} — hooks should have intercepted this`);
+  }
+}
+
 // Dedicated hook endpoints that return in Claude's expected format
-app.post('/api/hooks/stop', async (_req: Request, res: Response) => {
+app.post('/api/hooks/stop', async (req: Request, res: Response) => {
+  logSubagentIfPresent(req, 'stop');
   const result = await handleHookRequest('stop');
   res.json(result);
 });
 
 // Pre-speak hook endpoint
-app.post('/api/hooks/pre-speak', (_req: Request, res: Response) => {
+app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
+  logSubagentIfPresent(req, 'pre-speak');
   const result = handleHookRequest('speak');
   res.json(result);
 });
 
 // Post-tool hook endpoint
-app.post('/api/hooks/post-tool', (_req: Request, res: Response) => {
+app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
+  logSubagentIfPresent(req, 'post-tool');
   const result = handleHookRequest('post-tool');
   res.json(result);
 });
