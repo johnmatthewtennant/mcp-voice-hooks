@@ -234,6 +234,65 @@ describe('Session routing bug fixes', () => {
       expect(switchData.activeKey).toBe(sessionB.key);
     });
 
+    it('conversation endpoint returns only the active session messages after switch', async () => {
+      // Register two sessions and add messages to each
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-A' }),
+      });
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'session-B' }),
+      });
+
+      // Add a message to session-A (currently active)
+      const keyA = JSON.stringify(['session-A', 'main']);
+      await fetch(`${server.url}/api/active-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: keyA }),
+      });
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Message for A' }),
+      });
+
+      // Switch to session-B and add a message there
+      const keyB = JSON.stringify(['session-B', 'main']);
+      await fetch(`${server.url}/api/active-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: keyB }),
+      });
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Message for B' }),
+      });
+
+      // Conversation should only contain session-B's messages
+      const convRes = await fetch(`${server.url}/api/conversation`);
+      const convData = await convRes.json() as any;
+      expect(convData.messages.some((m: any) => m.text === 'Message for B')).toBe(true);
+      expect(convData.messages.some((m: any) => m.text === 'Message for A')).toBe(false);
+
+      // Switch back to session-A
+      await fetch(`${server.url}/api/active-session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: keyA }),
+      });
+
+      // Conversation should only contain session-A's messages
+      const convRes2 = await fetch(`${server.url}/api/conversation`);
+      const convData2 = await convRes2.json() as any;
+      expect(convData2.messages.some((m: any) => m.text === 'Message for A')).toBe(true);
+      expect(convData2.messages.some((m: any) => m.text === 'Message for B')).toBe(false);
+    });
+
     it('session key with special characters survives round-trip', async () => {
       // Register a session with a UUID-like ID (contains hyphens)
       const sessionId = 'abc-123-def-456';

@@ -301,6 +301,8 @@ class MessengerClient {
                 this.activeSessionKey = key;
                 // Clear unread for this session
                 delete this.unreadCounts[key];
+                // Clear existing messages so the new session's messages replace them
+                this.conversationMessages.querySelectorAll('.message-bubble').forEach(el => el.remove());
                 // Reload conversation for new active session
                 this.loadData();
                 this.loadSessions();
