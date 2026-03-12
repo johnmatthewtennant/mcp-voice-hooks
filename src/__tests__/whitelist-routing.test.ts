@@ -106,7 +106,7 @@ describe('Pre-speak whitelist and multi-session routing', () => {
       expect(data.success).toBe(true);
     });
 
-    it('speak endpoint rejects non-whitelisted text when multi-session active', async () => {
+    it('speak endpoint returns success for non-whitelisted text (inactive session)', async () => {
       // Activate a session first (so activeCompositeKey is set)
       await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
@@ -117,15 +117,16 @@ describe('Pre-speak whitelist and multi-session routing', () => {
         }),
       });
 
-      // Try to speak different text
+      // Try to speak different text (not whitelisted = from inactive session)
       const res = await fetch(`${server.url}/api/speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'Not whitelisted' }),
       });
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(200);
       const data = await res.json() as any;
-      expect(data.error).toBe('Speak not authorized');
+      expect(data.success).toBe(true);
+      expect(data.respondedCount).toBe(0);
     });
 
     it('whitelist handles duplicate identical texts (multiset count)', async () => {
@@ -162,16 +163,19 @@ describe('Pre-speak whitelist and multi-session routing', () => {
       });
       expect(res2.status).toBe(200);
 
-      // Third should fail
+      // Third returns success without TTS (no whitelist entry left)
       const res3 = await fetch(`${server.url}/api/speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'Same text' }),
       });
-      expect(res3.status).toBe(403);
+      expect(res3.status).toBe(200);
+      const data3 = await res3.json() as any;
+      expect(data3.success).toBe(true);
+      expect(data3.respondedCount).toBe(0);
     });
 
-    it('pre-speak for inactive session blocks and stores in history', async () => {
+    it('pre-speak for inactive session approves and stores in history', async () => {
       // Set session-A as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
@@ -189,8 +193,7 @@ describe('Pre-speak whitelist and multi-session routing', () => {
         }),
       });
       const data = await res.json() as any;
-      expect(data.decision).toBe('block');
-      expect(data.reason).toContain('active session only');
+      expect(data.decision).toBe('approve');
 
       // Verify text was stored in session-B's conversation history
       const sessionBKey = JSON.stringify(['session-B', 'main']);

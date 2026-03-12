@@ -441,9 +441,12 @@ export class TestServer {
       if (this.activeCompositeKey !== null) {
         const whitelistResult = this.checkWhitelist(text);
         if (!whitelistResult.matched) {
-          res.status(403).json({
-            error: 'Speak not authorized',
-            message: 'This text was not approved by the pre-speak hook for the active session'
+          // Not whitelisted = inactive session. Pre-speak already stored text.
+          // Return success so the agent isn't confused.
+          res.json({
+            success: true,
+            message: 'Text spoken successfully',
+            respondedCount: 0
           });
           return;
         }
@@ -733,14 +736,13 @@ export class TestServer {
         return;
       }
 
-      // Inactive session: store in that session's conversation history, block TTS
+      // Inactive session: store in that session's conversation history, approve without TTS
       if (speakText) {
         session.queue.addAssistantMessage(speakText);
         session.lastSpeakTimestamp = new Date();
       }
       res.json({
-        decision: 'block',
-        reason: 'Voice output stored in session history. TTS is routed to the active session only.'
+        decision: 'approve',
       });
     });
 

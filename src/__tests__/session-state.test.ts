@@ -115,7 +115,7 @@ describe('Per-session state and session lifecycle', () => {
         body: JSON.stringify({ session_id: 'session-A' }),
       });
 
-      // Session-B tries to speak (inactive, blocked)
+      // Session-B tries to speak (inactive, approved but no TTS)
       const res = await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -125,7 +125,7 @@ describe('Per-session state and session lifecycle', () => {
         }),
       });
       const data = await res.json() as any;
-      expect(data.decision).toBe('block');
+      expect(data.decision).toBe('approve');
 
       // Check the message was stored in session-B's conversation history
       const sessionBKey = JSON.stringify(['session-B', 'main']);
@@ -192,7 +192,7 @@ describe('Per-session state and session lifecycle', () => {
         body: JSON.stringify({ session_id: 'session-B' }),
       });
 
-      // Session-B speaks (blocked from TTS but updates lastSpeakTimestamp)
+      // Session-B speaks (approved but no TTS, updates lastSpeakTimestamp)
       const speakRes = await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -202,7 +202,7 @@ describe('Per-session state and session lifecycle', () => {
         }),
       });
       const speakData = await speakRes.json() as any;
-      expect(speakData.decision).toBe('block'); // TTS blocked for inactive
+      expect(speakData.decision).toBe('approve'); // Approved (no TTS for inactive)
 
       // Session-B tries to stop — should now approve
       const stopRes = await fetch(`${server.url}/api/hooks/stop`, {

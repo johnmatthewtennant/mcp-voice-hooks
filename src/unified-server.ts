@@ -762,15 +762,14 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
     return;
   }
 
-  // Inactive session: store in that session's conversation history, block TTS
+  // Inactive session: store in that session's conversation history, approve without TTS
   if (speakText) {
     session.queue.addAssistantMessage(speakText);
     session.lastSpeakTimestamp = new Date();
     debugLog(`[Speak] Stored for inactive session: key=${key} text="${speakText.slice(0, 30)}..."`);
   }
   res.json({
-    decision: 'block',
-    reason: 'Voice output stored in session history. TTS is routed to the active session only.'
+    decision: 'approve',
   });
 });
 
@@ -994,15 +993,19 @@ app.post('/api/speak', async (req: Request, res: Response) => {
     return;
   }
 
-  // Check whitelist: only speak if text was approved by pre-speak hook
+  // Check whitelist: only speak via TTS if text was approved by pre-speak hook
   // Skip whitelist check if no multi-session is active (single session backward compat)
   let whitelistSessionKey: string | undefined;
   if (activeCompositeKey !== null) {
     const whitelistResult = checkWhitelist(text);
     if (!whitelistResult.matched) {
-      res.status(403).json({
-        error: 'Speak not authorized',
-        message: 'This text was not approved by the pre-speak hook for the active session'
+      // Not whitelisted = inactive session. The pre-speak hook already stored the text
+      // in conversation history. Return success so the agent isn't confused.
+      debugLog(`[Speak] Non-whitelisted text (inactive session), returning success without TTS: "${text.slice(0, 30)}..."`);
+      res.json({
+        success: true,
+        message: 'Text spoken successfully',
+        respondedCount: 0
       });
       return;
     }
