@@ -32,10 +32,25 @@ npm install -g @anthropic-ai/claude-code
 
 ### 2. Install Voice Mode
 
-```bash
-npx mcp-voice-hooks@latest install-hooks
-claude mcp add voice-hooks npx mcp-voice-hooks@latest
+Add the following to any Claude Code settings file (`~/.claude/settings.json`, `.claude/settings.json`, or `.claude/settings.local.json`):
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "mcp-voice-hooks-marketplace": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/johnmatthewtennant/mcp-voice-hooks.git"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "mcp-voice-hooks-plugin@mcp-voice-hooks-marketplace": true
+  }
+}
 ```
+
+Restart Claude Code. Set `"mcp-voice-hooks-plugin@mcp-voice-hooks-marketplace"` to `false` to temporarily disable.
 
 ## Usage
 
@@ -101,34 +116,25 @@ Other downloaded voices will show up in the voice dropdown in the voice-hooks br
 
 There is a bug in Safari that prevents browser text-to-speech from loading high-quality voices after browser restart. This is a Safari Web Speech API limitation. To use high-quality voices in Safari you need to set your system voice to Siri and select "Mac System Voice" in the voice-hooks browser interface.
 
-## Manual Hook Installation
-
-The hooks are automatically installed/updated when the MCP server starts. However, if you need to manually install or reconfigure the hooks:
-
-```bash
-npx mcp-voice-hooks install-hooks
-```
-
-This will configure your project's `.claude/settings.local.json` with the necessary hook commands.
-
 ## Uninstallation
 
-To completely remove MCP Voice Hooks:
+Remove the `extraKnownMarketplaces` and `enabledPlugins` entries from your settings file and restart Claude Code.
+
+### Alternative: Manual Installation
+
+If you prefer not to use the plugin system, you can install manually:
 
 ```bash
-# Remove from Claude MCP servers
-claude mcp remove voice-hooks
+npx mcp-voice-hooks@latest install-hooks
+claude mcp add voice-hooks npx mcp-voice-hooks@latest
 ```
 
+To uninstall:
+
 ```bash
-# Also remove hooks and settings
+claude mcp remove voice-hooks
 npx mcp-voice-hooks uninstall
 ```
-
-This will:
-
-- Clean up voice hooks from your project's `.claude/settings.local.json`
-- Preserve any custom hooks you've added
 
 ## Configuration
 
@@ -162,25 +168,3 @@ When running in MCP-managed mode, the browser will automatically open if no fron
   }
 }
 ```
-
-## Experimental: Alternate Installation Method - Plugin mode
-
-Simply add the following to your project's `.claude/settings.local.json` and restart Claude Code:
-
-```json
-{
-  "extraKnownMarketplaces": {
-    "mcp-voice-hooks-marketplace": {
-      "source": {
-        "source": "git",
-        "url": "https://github.com/johnmatthewtennant/mcp-voice-hooks.git"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "mcp-voice-hooks-plugin@mcp-voice-hooks-marketplace": true
-  }
-}
-```
-
-set `enabled` to `false` if you want to temporarily disable the plugin.
