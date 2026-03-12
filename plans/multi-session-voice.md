@@ -59,22 +59,20 @@ Hooks read stdin and pass the full JSON (including agent_id) to the server:
 - **PostToolUse & Stop**: if agent_id present, return instant approve (skip voice routing)
 - **PreToolUse (speak)**: ALWAYS pass through to server — even for sub-agents
 
-### Pre-Speak Text Whitelist (new)
+### Pre-Speak Key-Based Approval (new)
 
-The pre-speak hook receives `session_id`, `agent_id`, AND the speak text (`tool_input.text`). The MCP speak call arrives separately without session/agent identity (shared stdio connection). We bridge this gap by whitelisting the specific text:
+The pre-speak hook receives `session_id` and `agent_id`. The MCP speak call arrives separately without identity (shared stdio connection). We bridge this gap using the composite key as a gate:
 
-1. **Pre-speak hook fires** → sends full JSON to server (session_id + agent_id + tool_input.text)
+1. **Pre-speak hook fires** → sends full JSON to server (session_id + agent_id)
 2. **Server receives pre-speak request**:
    - Computes composite key: `(session_id, agent_id || "main")`
-   - Stores the text in that key's conversation history
-   - If composite key is **active**: whitelist the text, return approve
-   - If composite key is **inactive**: store text in history but don't whitelist, return approve
+   - If composite key matches the **active** key: set approval flag, return approve
+   - If composite key is **inactive**: store text in conversation history, DON'T set flag, return approve (hook allows, but MCP call will be rejected)
 3. **MCP speak call arrives** (no session/agent identity):
-   - Check whitelist for matching text
-   - If match → play TTS, remove from whitelist
-   - If no match → reject (came from non-active agent/session)
+   - If approval flag is set → play TTS, clear flag
+   - If no flag → reject (came from non-active session/agent)
 
-Text matching is needed because multiple agents may call speak in quick succession — a boolean flag can't distinguish whose call is which.
+No text matching needed — the composite key is the gate. Multiple concurrent speak calls from the active session all get approved because they all have the same key. Non-active sessions never set the flag.
 
 This solves both the sub-agent problem (same session, different agent_id) and the tmux teammate problem (different session_id, no agent_id).
 
@@ -89,7 +87,7 @@ interface SessionState {
   agentId: string | null;     // From hook input agent_id (null = main agent)
   agentType: string | null;   // From hook input agent_type
   conversationHistory: Message[];
-  speakWhitelist: Set<string>; // Pre-approved speak texts
+  speakApproved: boolean;      // Flag set by pre-speak hook for active key
   lastToolUseTimestamp: Date | null;
   lastSpeakTimestamp: Date | null;
 }
@@ -156,29 +154,37 @@ function notifySessionClients(sessionId: string, event: any) {
 
 ## Implementation Phases
 
-### Phase 1: Session-aware hooks (server + hooks)
-- Update hook commands to read stdin and pass full JSON to server
-- Server parses session_id, agent_id, agent_type from POST body
-- If agent_id present → instant approve (simple sub-agent blocking)
-- If agent_id absent → existing behavior (backward compatible)
-- No UI changes needed
+### Phase 1: Sub-agent blocking via agent_id (DONE)
+- Hooks read stdin and check for agent_id
+- Sub-agent post-tool/stop hooks return instant approve
+- Sub-agent pre-speak hooks block speak tool
+- Verified: 10/10 sub-agent speak calls blocked, 5/5 teammate speaks blocked (later fix needed)
 
-### Phase 2: Per-session state
-- Create session map with per-session utterance queues
-- Route utterances by session_id
-- Speak tool uses MCP connection to identify session
-- Multiple main agents (different Claude Code instances) get separate queues
+### Phase 2: Server startup detection + single instance
+- On startup, check if port is already in use (probe HTTP endpoint)
+- If server already running → skip starting a new one, connect MCP to existing server
+- Prevents teammates from spawning duplicate servers
+- Not a problem yet but is a landmine — teammates currently start separate servers on same port
 
-### Phase 3: Browser session selector
+### Phase 3: Pre-speak key-based approval
+- Pre-speak hook always passes session_id + agent_id to server
+- Server registers active composite key (first session or user-selected)
+- Only active key's pre-speak sets approval flag
+- MCP speak calls only go through when approval flag is set
+- Handles sub-agents (same session_id, different agent_id) AND teammates (different session_id)
+
+### Phase 4: Per-session conversation history
+- Create session map keyed by composite key
+- Store speak text in each key's conversation history
+- Route utterances only to active key's queue
+- Non-active sessions get instant approve on all hooks
+
+### Phase 5: Browser session selector
 - Add session list to UI
-- Session switching loads correct conversation history
+- Session switching changes active composite key
+- Loads that session's conversation history
 - SSE scoped to active session
 - Unread message indicators
-
-### Phase 4: Multi-instance support (optional, later)
-- Second Claude Code instance detects existing server on port
-- Connects as new session instead of starting own server
-- Requires port discovery / lock file mechanism
 
 ## Open Questions
 
@@ -186,7 +192,7 @@ function notifySessionClients(sessionId: string, event: any) {
 - Should inactive sessions still be able to speak via TTS if the user enables a "hear all" mode?
 - How long do sessions persist after the MCP connection closes? Should there be a TTL?
 - Should the browser auto-switch to a session when it receives voice input? (probably not — user controls routing)
-- The `session_id` is shared across parent + sub-agents. Should we use `session_id + agent_id` as the compound key?
+- ~~The `session_id` is shared across parent + sub-agents. Should we use `session_id + agent_id` as the compound key?~~ **YES — composite key is the design.**
 
 ## Research Notes
 
