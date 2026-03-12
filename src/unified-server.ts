@@ -785,6 +785,13 @@ app.get('/messenger', (_req: Request, res: Response) => {
 
 // Start HTTP server
 app.listen(HTTP_PORT, async () => {
+  // Log startup info with git hash and timestamp to file for debugging
+  const { execSync } = await import('child_process');
+  let gitHash = 'unknown';
+  try { gitHash = execSync('git rev-parse --short HEAD', { cwd: import.meta.dirname, encoding: 'utf-8' }).trim(); } catch {}
+  const startupLine = `[${new Date().toISOString()}] mcp-voice-hooks started: git=${gitHash} port=${HTTP_PORT} mode=${IS_MCP_MANAGED ? 'mcp' : 'standalone'} features=[subagent-detection]`;
+  try { const fs = await import('fs'); fs.appendFileSync('/tmp/mcp-voice-hooks.log', startupLine + '\n'); } catch {}
+
   if (!IS_MCP_MANAGED) {
     console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
     console.log(`[Mode] Running in ${IS_MCP_MANAGED ? 'MCP-managed' : 'standalone'} mode`);
