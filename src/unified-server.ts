@@ -7,7 +7,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { exec } from 'child_process';
+import { exec, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
@@ -37,6 +37,54 @@ async function playNotificationSound() {
     debugLog(`[Sound] Failed to play sound: ${error}`);
     // Don't throw - sound is not critical
   }
+}
+
+// TTS audio queue - serializes say commands to prevent overlapping audio
+const ttsQueue: Array<{ text: string; rate: number; resolve: () => void; reject: (err: Error) => void }> = [];
+let ttsPlaying = false;
+let ttsCurrentProcess: ChildProcess | null = null;
+
+async function processTtsQueue() {
+  if (ttsPlaying || ttsQueue.length === 0) return;
+  ttsPlaying = true;
+  const item = ttsQueue.shift()!;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      ttsCurrentProcess = exec(`say -r ${item.rate} "${item.text.replace(/"/g, '\\"')}"`, (error) => {
+        ttsCurrentProcess = null;
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    item.resolve();
+  } catch (error) {
+    item.reject(error instanceof Error ? error : new Error(String(error)));
+  } finally {
+    ttsPlaying = false;
+    processTtsQueue();
+  }
+}
+
+function enqueueTts(text: string, rate: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ttsQueue.push({ text, rate, resolve, reject });
+    processTtsQueue();
+  });
+}
+
+function clearTtsQueue() {
+  // Kill any currently playing say process
+  if (ttsCurrentProcess) {
+    ttsCurrentProcess.kill();
+    ttsCurrentProcess = null;
+  }
+  // Reject all pending items and clear the queue
+  while (ttsQueue.length > 0) {
+    const item = ttsQueue.shift()!;
+    item.reject(new Error('TTS queue cleared'));
+  }
+  ttsPlaying = false;
+  debugLog('[TTS Queue] Cleared');
 }
 
 // Shared utterance queue
@@ -816,6 +864,7 @@ app.delete('/api/utterances', (_req: Request, res: Response) => {
   const session = getActiveSessionOrFirst();
   const clearedCount = session.queue.utterances.length;
   session.queue.clear();
+  clearTtsQueue();
 
   res.json({
     success: true,
@@ -1067,9 +1116,8 @@ app.post('/api/speak-system', async (req: Request, res: Response) => {
   }
 
   try {
-    // Execute text-to-speech using macOS say command
-    // Note: Mac say command doesn't support volume control
-    await execAsync(`say -r ${rate} "${text.replace(/"/g, '\\"')}"`);
+    // Enqueue TTS to prevent overlapping say commands
+    await enqueueTts(text, rate);
     debugLog(`[Speak System] Spoke text using macOS say: "${text}" (rate: ${rate})`);
 
     res.json({

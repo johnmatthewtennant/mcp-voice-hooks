@@ -111,6 +111,39 @@ class UtteranceQueue {
   }
 }
 
+// TTS audio queue - serializes say commands to prevent overlapping audio
+const ttsQueue: Array<{ text: string; rate: number; resolve: () => void; reject: (err: Error) => void }> = [];
+let ttsPlaying = false;
+
+async function processTtsQueue() {
+  if (ttsPlaying || ttsQueue.length === 0) return;
+  ttsPlaying = true;
+  const item = ttsQueue.shift()!;
+  try {
+    await execAsync(`say -r ${item.rate} "${item.text.replace(/"/g, '\\"')}"`);
+    item.resolve();
+  } catch (error) {
+    item.reject(error instanceof Error ? error : new Error(String(error)));
+  } finally {
+    ttsPlaying = false;
+    processTtsQueue();
+  }
+}
+
+function enqueueTts(text: string, rate: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    ttsQueue.push({ text, rate, resolve, reject });
+    processTtsQueue();
+  });
+}
+
+function clearTtsQueue() {
+  while (ttsQueue.length > 0) {
+    const item = ttsQueue.shift()!;
+    item.reject(new Error('TTS queue cleared'));
+  }
+}
+
 // Voice preferences type
 interface VoicePreferences {
   voiceResponsesEnabled: boolean;
@@ -495,7 +528,7 @@ export class TestServer {
       }
 
       try {
-        await execAsync(`say -r ${rate} "${text.replace(/"/g, '\\"')}"`);
+        await enqueueTts(text, rate);
 
         res.json({
           success: true,
@@ -551,6 +584,7 @@ export class TestServer {
     this.app.delete('/api/utterances', (_req, res) => {
       const session = this.getActiveSessionOrFirst();
       session.queue.clear();
+      clearTtsQueue();
       res.json({ success: true });
     });
 
@@ -840,5 +874,6 @@ export class TestServer {
     this.activeCompositeKey = null;
     this.speakWhitelist.clear();
     this.backgroundVoiceEnforcement = false;
+    clearTtsQueue();
   }
 }
