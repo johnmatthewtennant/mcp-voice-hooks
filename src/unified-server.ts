@@ -211,14 +211,14 @@ let voicePreferences = {
 // Rendered TTS audio files - maps audioId to file info
 const renderedAudioFiles = new Map<string, { filePath: string; createdAt: number }>();
 
-// Render TTS to M4A file using say -o (no audio output)
+// Render TTS to WAV file using say -o (uncompressed PCM for best quality)
 function renderTtsToFile(text: string, rate: number): Promise<{ filePath: string; audioId: string }> {
   const audioId = randomUUID();
-  const filePath = `/tmp/mcp-voice-hooks-tts-${audioId}.m4a`;
+  const filePath = `/tmp/mcp-voice-hooks-tts-${audioId}.wav`;
   const clampedRate = Math.max(50, Math.min(500, Math.round(rate)));
 
   return new Promise((resolve, reject) => {
-    ttsCurrentProcess = execFile('say', ['-r', String(clampedRate), '-o', filePath, '--data-format=aac', text], (error) => {
+    ttsCurrentProcess = execFile('say', ['-r', String(clampedRate), '-o', filePath, '--file-format', 'WAVE', '--data-format', 'LEI16@22050', text], (error) => {
       ttsCurrentProcess = null;
       if (error) {
         // Clean up temp file on error
@@ -1202,7 +1202,7 @@ app.get('/api/tts-audio/:id', (req: Request, res: Response) => {
     return;
   }
 
-  res.set('Content-Type', 'audio/mp4');
+  res.set('Content-Type', 'audio/wav');
   res.sendFile(fileInfo.filePath, (err) => {
     if (err) {
       debugLog(`[TTS Audio] Failed to send audio file: ${err}`);
