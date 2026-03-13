@@ -162,6 +162,7 @@ interface VoicePreferences {
   voiceResponsesEnabled: boolean;
   voiceInputActive: boolean;
   selectedVoice: string;
+  speechRate: number;
 }
 
 // Background voice enforcement: when enabled, inactive sessions must speak after tool use
@@ -206,7 +207,8 @@ export class TestServer {
     this.voicePreferences = {
       voiceResponsesEnabled: false,
       voiceInputActive: false,
-      selectedVoice: 'browser'
+      selectedVoice: 'browser',
+      speechRate: 200
     };
 
     this.setupMiddleware();
@@ -617,7 +619,11 @@ export class TestServer {
       }
 
       this.voicePreferences.selectedVoice = selectedVoice;
-      res.json({ success: true, selectedVoice });
+      const { speechRate } = req.body;
+      if (typeof speechRate === 'number' && speechRate > 0) {
+        this.voicePreferences.speechRate = Math.max(50, Math.min(500, Math.round(speechRate)));
+      }
+      res.json({ success: true, selectedVoice, speechRate: this.voicePreferences.speechRate });
     });
 
     // POST /api/validate-action
@@ -902,7 +908,8 @@ export class TestServer {
     this.voicePreferences = {
       voiceResponsesEnabled: false,
       voiceInputActive: false,
-      selectedVoice: 'browser'
+      selectedVoice: 'browser',
+      speechRate: 200
     };
     this.activeCompositeKey = null;
     this.speakWhitelist.clear();
