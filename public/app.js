@@ -625,6 +625,7 @@ class MessengerClient {
                 this.speechRate = parseFloat(e.target.value);
                 this.speechRateInput.value = this.speechRate.toFixed(1);
                 localStorage.setItem('speechRate', this.speechRate.toString());
+                this.syncSelectedVoiceToServer();
             });
         }
 
@@ -638,6 +639,7 @@ class MessengerClient {
                     this.speechRateSlider.value = value.toString();
                     this.speechRateInput.value = value.toFixed(1);
                     localStorage.setItem('speechRate', this.speechRate.toString());
+                    this.syncSelectedVoiceToServer();
                 }
             });
         }
@@ -1052,7 +1054,7 @@ class MessengerClient {
             await fetch(`${this.baseUrl}/api/selected-voice`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ selectedVoice: this.selectedVoice })
+                body: JSON.stringify({ selectedVoice: this.selectedVoice, speechRate: Math.round(this.speechRate * 200) })
             });
         } catch (error) {
             this.debugLog('Failed to sync selected voice to server:', error);

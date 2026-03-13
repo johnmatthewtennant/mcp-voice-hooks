@@ -204,7 +204,8 @@ const IS_MCP_MANAGED = process.argv.includes('--mcp-managed');
 let voicePreferences = {
   voiceResponsesEnabled: false,
   voiceInputActive: false,
-  selectedVoice: 'browser' as string  // 'system' or 'browser:N'
+  selectedVoice: 'browser' as string,  // 'system' or 'browser:N'
+  speechRate: 200 as number  // words per minute for say -o rendering
 };
 
 // Rendered TTS audio files - maps audioId to file info
@@ -1154,7 +1155,7 @@ app.post('/api/speak', async (req: Request, res: Response) => {
     // This is async/non-blocking — the speak endpoint returns immediately
     if (voicePreferences.selectedVoice === 'system') {
       const sessionKey = whitelistSessionKey || activeCompositeKey;
-      enqueueTts(text, 200, sessionKey).catch(err => {
+      enqueueTts(text, voicePreferences.speechRate, sessionKey).catch(err => {
         debugLog(`[Speak] Failed to render system voice audio: ${err}`);
       });
     }
@@ -1214,7 +1215,7 @@ app.get('/api/tts-audio/:id', (req: Request, res: Response) => {
 
 // Set selected voice preference (browser syncs this on voice dropdown change)
 app.post('/api/selected-voice', (req: Request, res: Response) => {
-  const { selectedVoice } = req.body;
+  const { selectedVoice, speechRate } = req.body;
 
   if (!selectedVoice || typeof selectedVoice !== 'string') {
     res.status(400).json({ error: 'selectedVoice is required' });
@@ -1222,8 +1223,11 @@ app.post('/api/selected-voice', (req: Request, res: Response) => {
   }
 
   voicePreferences.selectedVoice = selectedVoice;
-  debugLog(`[Voice] Selected voice changed to: ${selectedVoice}`);
-  res.json({ success: true, selectedVoice });
+  if (typeof speechRate === 'number' && speechRate > 0) {
+    voicePreferences.speechRate = Math.max(50, Math.min(500, Math.round(speechRate)));
+  }
+  debugLog(`[Voice] Selected voice: ${selectedVoice}, rate: ${voicePreferences.speechRate}`);
+  res.json({ success: true, selectedVoice, speechRate: voicePreferences.speechRate });
 });
 
 // UI Routing
