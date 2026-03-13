@@ -51,6 +51,11 @@ class MessengerClient {
         this.speechRate = 1.0;
         this.speechPitch = 1.0;
 
+        // Audio playback queue (for server-rendered system voice)
+        this.audioQueue = [];
+        this.audioPlaying = false;
+        this.currentAudio = null;
+
         // Session state
         this.sessions = [];
         this.activeSessionKey = null;
@@ -127,7 +132,16 @@ class MessengerClient {
                 const data = JSON.parse(event.data);
 
                 if (data.type === 'speak' && data.text) {
-                    this.speakText(data.text);
+                    // If system voice is selected, don't do browser TTS — audio will arrive via tts-audio event
+                    if (this.selectedVoice !== 'system') {
+                        this.speakText(data.text);
+                    }
+                } else if (data.type === 'tts-audio' && data.audioUrl) {
+                    // Server-rendered audio ready — queue for playback
+                    this.audioQueue.push(data.audioUrl);
+                    this.processAudioQueue();
+                } else if (data.type === 'tts-clear') {
+                    this.clearAudioQueue();
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
                 }
@@ -329,68 +343,83 @@ class MessengerClient {
         }
     }
 
-    async speakText(text) {
-        // Check if we should use system voice
-        if (this.selectedVoice === 'system') {
-            // Use Mac system voice via server
-            try {
-                const response = await fetch(`${this.baseUrl}/api/speak-system`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        text: text,
-                        rate: Math.round(this.speechRate * 150) // Convert rate to words per minute
-                    }),
-                });
+    processAudioQueue() {
+        if (this.audioPlaying || this.audioQueue.length === 0) return;
+        this.audioPlaying = true;
+        const url = this.audioQueue.shift();
+        const audio = new Audio(url);
+        this.currentAudio = audio;
 
-                if (!response.ok) {
-                    const error = await response.json();
-                    console.error('Failed to speak via system voice:', error);
-                }
-            } catch (error) {
-                console.error('Failed to call speak-system API:', error);
-            }
-        } else {
-            // Use browser voice
-            if (!window.speechSynthesis) {
-                console.error('Speech synthesis not available');
-                return;
-            }
+        audio.play().catch((err) => {
+            console.warn('Audio playback failed (autoplay restriction?):', err);
+            this.audioPlaying = false;
+            this.currentAudio = null;
+            this.processAudioQueue();
+        });
 
-            // Cancel any ongoing speech
-            window.speechSynthesis.cancel();
+        audio.addEventListener('ended', () => {
+            this.audioPlaying = false;
+            this.currentAudio = null;
+            this.processAudioQueue();
+        });
 
-            // Create utterance
-            const utterance = new SpeechSynthesisUtterance(text);
+        audio.addEventListener('error', (e) => {
+            console.warn('Audio playback error:', e);
+            this.audioPlaying = false;
+            this.currentAudio = null;
+            this.processAudioQueue();
+        });
+    }
 
-            // Set voice if using browser voice
-            if (this.selectedVoice && this.selectedVoice.startsWith('browser:')) {
-                const voiceIndex = parseInt(this.selectedVoice.substring(8));
-                if (this.voices[voiceIndex]) {
-                    utterance.voice = this.voices[voiceIndex];
-                }
-            }
-
-            // Set speech properties
-            utterance.rate = this.speechRate;
-            utterance.pitch = this.speechPitch;
-
-            // Event handlers
-            utterance.onstart = () => {
-                this.debugLog('Started speaking:', text);
-            };
-
-            utterance.onend = () => {
-                this.debugLog('Finished speaking');
-            };
-
-            utterance.onerror = (event) => {
-                console.error('Speech synthesis error:', event);
-            };
-
-            // Speak the text
-            window.speechSynthesis.speak(utterance);
+    clearAudioQueue() {
+        this.audioQueue = [];
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio = null;
         }
+        this.audioPlaying = false;
+    }
+
+    speakText(text) {
+        // Browser TTS only — system voice audio arrives via SSE tts-audio events
+        if (!window.speechSynthesis) {
+            console.error('Speech synthesis not available');
+            return;
+        }
+
+        // Cancel any ongoing speech
+        window.speechSynthesis.cancel();
+
+        // Create utterance
+        const utterance = new SpeechSynthesisUtterance(text);
+
+        // Set voice if using browser voice
+        if (this.selectedVoice && this.selectedVoice.startsWith('browser:')) {
+            const voiceIndex = parseInt(this.selectedVoice.substring(8));
+            if (this.voices[voiceIndex]) {
+                utterance.voice = this.voices[voiceIndex];
+            }
+        }
+
+        // Set speech properties
+        utterance.rate = this.speechRate;
+        utterance.pitch = this.speechPitch;
+
+        // Event handlers
+        utterance.onstart = () => {
+            this.debugLog('Started speaking:', text);
+        };
+
+        utterance.onend = () => {
+            this.debugLog('Finished speaking');
+        };
+
+        utterance.onerror = (event) => {
+            console.error('Speech synthesis error:', event);
+        };
+
+        // Speak the text
+        window.speechSynthesis.speak(utterance);
     }
 
     loadPreferences() {
@@ -416,6 +445,9 @@ class MessengerClient {
             if (this.speechRateSlider) this.speechRateSlider.value = this.speechRate.toString();
             if (this.speechRateInput) this.speechRateInput.value = this.speechRate.toFixed(1);
         }
+
+        // Sync selected voice to server on load
+        this.syncSelectedVoiceToServer();
     }
 
     populateLanguageFilter() {
@@ -577,6 +609,7 @@ class MessengerClient {
             this.selectedVoice = e.target.value;
             localStorage.setItem('selectedVoice', this.selectedVoice);
             this.updateVoiceWarnings();
+            this.syncSelectedVoiceToServer();
         });
 
         // Language filter
@@ -1011,6 +1044,18 @@ class MessengerClient {
             });
         } catch (error) {
             console.error('Failed to update voice input state:', error);
+        }
+    }
+
+    async syncSelectedVoiceToServer() {
+        try {
+            await fetch(`${this.baseUrl}/api/selected-voice`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ selectedVoice: this.selectedVoice })
+            });
+        } catch (error) {
+            this.debugLog('Failed to sync selected voice to server:', error);
         }
     }
 

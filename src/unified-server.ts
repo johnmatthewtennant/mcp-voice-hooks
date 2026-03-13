@@ -7,8 +7,9 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { exec, type ChildProcess } from 'child_process';
+import { exec, execFile, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -39,8 +40,15 @@ async function playNotificationSound() {
   }
 }
 
-// TTS audio queue - serializes say commands to prevent overlapping audio
-const ttsQueue: Array<{ text: string; rate: number; resolve: () => void; reject: (err: Error) => void }> = [];
+// TTS audio queue - serializes say -o renders to prevent CPU overload
+interface TtsQueueItem {
+  text: string;
+  rate: number;
+  sessionKey: string | null;
+  resolve: (audioId: string) => void;
+  reject: (err: Error) => void;
+}
+const ttsQueue: TtsQueueItem[] = [];
 let ttsPlaying = false;
 let ttsCurrentProcess: ChildProcess | null = null;
 
@@ -49,14 +57,10 @@ async function processTtsQueue() {
   ttsPlaying = true;
   const item = ttsQueue.shift()!;
   try {
-    await new Promise<void>((resolve, reject) => {
-      ttsCurrentProcess = exec(`say -r ${item.rate} "${item.text.replace(/"/g, '\\"')}"`, (error) => {
-        ttsCurrentProcess = null;
-        if (error) reject(error);
-        else resolve();
-      });
-    });
-    item.resolve();
+    const { audioId } = await renderTtsToFile(item.text, item.rate);
+    // Notify browser with audio URL, routed to correct session
+    notifyTTSAudio(`/api/tts-audio/${audioId}`, item.sessionKey);
+    item.resolve(audioId);
   } catch (error) {
     item.reject(error instanceof Error ? error : new Error(String(error)));
   } finally {
@@ -65,25 +69,27 @@ async function processTtsQueue() {
   }
 }
 
-function enqueueTts(text: string, rate: number): Promise<void> {
+function enqueueTts(text: string, rate: number, sessionKey: string | null = null): Promise<string> {
   return new Promise((resolve, reject) => {
-    ttsQueue.push({ text, rate, resolve, reject });
+    ttsQueue.push({ text, rate, sessionKey, resolve, reject });
     processTtsQueue();
   });
 }
 
 function clearTtsQueue() {
-  // Kill any currently playing say process
+  // Kill any currently running say -o render process
   if (ttsCurrentProcess) {
     ttsCurrentProcess.kill();
     ttsCurrentProcess = null;
   }
-  // Reject all pending items and clear the queue
+  // Reject all pending items and clean up their rendered files
   while (ttsQueue.length > 0) {
     const item = ttsQueue.shift()!;
     item.reject(new Error('TTS queue cleared'));
   }
   ttsPlaying = false;
+  // Notify browser to clear its audio playback queue
+  notifyTTSClear();
   debugLog('[TTS Queue] Cleared');
 }
 
@@ -197,8 +203,47 @@ const IS_MCP_MANAGED = process.argv.includes('--mcp-managed');
 // Voice preferences (controlled by browser)
 let voicePreferences = {
   voiceResponsesEnabled: false,
-  voiceInputActive: false
+  voiceInputActive: false,
+  selectedVoice: 'browser' as string  // 'system' or 'browser:N'
 };
+
+// Rendered TTS audio files - maps audioId to file info
+const renderedAudioFiles = new Map<string, { filePath: string; createdAt: number }>();
+
+// Render TTS to M4A file using say -o (no audio output)
+function renderTtsToFile(text: string, rate: number): Promise<{ filePath: string; audioId: string }> {
+  const audioId = randomUUID();
+  const filePath = `/tmp/mcp-voice-hooks-tts-${audioId}.m4a`;
+  const clampedRate = Math.max(50, Math.min(500, Math.round(rate)));
+
+  return new Promise((resolve, reject) => {
+    ttsCurrentProcess = execFile('say', ['-r', String(clampedRate), '-o', filePath, '--data-format=aac', text], (error) => {
+      ttsCurrentProcess = null;
+      if (error) {
+        // Clean up temp file on error
+        fs.unlink(filePath, () => {});
+        reject(error);
+      } else {
+        renderedAudioFiles.set(audioId, { filePath, createdAt: Date.now() });
+        debugLog(`[TTS Render] Rendered to ${filePath} (rate: ${clampedRate})`);
+        resolve({ filePath, audioId });
+      }
+    });
+  });
+}
+
+// Periodic cleanup of old rendered audio files (every 5 minutes, delete files older than 10 minutes)
+setInterval(() => {
+  const now = Date.now();
+  const maxAge = 10 * 60 * 1000; // 10 minutes
+  for (const [id, info] of renderedAudioFiles) {
+    if (now - info.createdAt > maxAge) {
+      fs.unlink(info.filePath, () => {});
+      renderedAudioFiles.delete(id);
+      debugLog(`[TTS Cleanup] Deleted expired audio file: ${info.filePath}`);
+    }
+  }
+}, 5 * 60 * 1000);
 
 // Background voice enforcement: when enabled, inactive sessions get
 // voiceResponsesEnabled=true and voiceInputActive=false in hook responses,
@@ -938,6 +983,25 @@ function notifyTTSClients(text: string) {
   });
 }
 
+// Helper function to notify TTS clients with rendered audio URL
+function notifyTTSAudio(audioUrl: string, sessionKey: string | null) {
+  const targetKey = sessionKey || activeCompositeKey;
+  const message = JSON.stringify({ type: 'tts-audio', audioUrl, sessionKey: targetKey });
+  ttsClients.forEach((viewingKey, client) => {
+    if (viewingKey === null || viewingKey === targetKey) {
+      client.write(`data: ${message}\n\n`);
+    }
+  });
+}
+
+// Helper function to notify TTS clients to clear their audio playback queue
+function notifyTTSClear() {
+  const message = JSON.stringify({ type: 'tts-clear' });
+  ttsClients.forEach((_viewingKey, client) => {
+    client.write(`data: ${message}\n\n`);
+  });
+}
+
 // Helper function to notify clients viewing the active session about wait status
 function notifyWaitStatus(isWaiting: boolean) {
   const message = JSON.stringify({ type: 'waitStatus', isWaiting, sessionKey: activeCompositeKey });
@@ -1082,11 +1146,18 @@ app.post('/api/speak', async (req: Request, res: Response) => {
       ? (sessions.get(whitelistSessionKey) || getActiveSessionOrFirst())
       : getActiveSessionOrFirst();
 
-    // Always notify browser clients - they decide how to speak
+    // Always send text via SSE for conversation display + browser TTS
     notifyTTSClients(text);
-    debugLog(`[Speak] Sent text to browser for TTS: "${text}"`);
+    debugLog(`[Speak] Sent text to browser: "${text}"`);
 
-    // Note: The browser will decide whether to use system voice or browser voice
+    // If system voice selected, also render audio and send audio URL via SSE
+    // This is async/non-blocking — the speak endpoint returns immediately
+    if (voicePreferences.selectedVoice === 'system') {
+      const sessionKey = whitelistSessionKey || activeCompositeKey;
+      enqueueTts(text, 200, sessionKey).catch(err => {
+        debugLog(`[Speak] Failed to render system voice audio: ${err}`);
+      });
+    }
 
     // Store assistant's response in conversation history
     session.queue.addAssistantMessage(text);
@@ -1120,31 +1191,39 @@ app.post('/api/speak', async (req: Request, res: Response) => {
   }
 });
 
-// API for system text-to-speech (always uses Mac say command)
-app.post('/api/speak-system', async (req: Request, res: Response) => {
-  const { text, rate = 150 } = req.body;
+// Serve rendered TTS audio files
+app.get('/api/tts-audio/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  const fileInfo = renderedAudioFiles.get(id);
 
-  if (!text || !text.trim()) {
-    res.status(400).json({ error: 'Text is required' });
+  if (!fileInfo) {
+    res.status(404).json({ error: 'Audio file not found or expired' });
     return;
   }
 
-  try {
-    // Enqueue TTS to prevent overlapping say commands
-    await enqueueTts(text, rate);
-    debugLog(`[Speak System] Spoke text using macOS say: "${text}" (rate: ${rate})`);
+  res.set('Content-Type', 'audio/mp4');
+  res.sendFile(fileInfo.filePath, (err) => {
+    if (err) {
+      debugLog(`[TTS Audio] Failed to send audio file: ${err}`);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to send audio file' });
+      }
+    }
+  });
+});
 
-    res.json({
-      success: true,
-      message: 'Text spoken successfully via system voice'
-    });
-  } catch (error) {
-    debugLog(`[Speak System] Failed to speak text: ${error}`);
-    res.status(500).json({
-      error: 'Failed to speak text via system voice',
-      details: error instanceof Error ? error.message : String(error)
-    });
+// Set selected voice preference (browser syncs this on voice dropdown change)
+app.post('/api/selected-voice', (req: Request, res: Response) => {
+  const { selectedVoice } = req.body;
+
+  if (!selectedVoice || typeof selectedVoice !== 'string') {
+    res.status(400).json({ error: 'selectedVoice is required' });
+    return;
   }
+
+  voicePreferences.selectedVoice = selectedVoice;
+  debugLog(`[Voice] Selected voice changed to: ${selectedVoice}`);
+  res.json({ success: true, selectedVoice });
 });
 
 // UI Routing

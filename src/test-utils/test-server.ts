@@ -111,17 +111,29 @@ class UtteranceQueue {
   }
 }
 
-// TTS audio queue - serializes say commands to prevent overlapping audio
-const ttsQueue: Array<{ text: string; rate: number; resolve: () => void; reject: (err: Error) => void }> = [];
+// TTS audio queue - serializes say renders to prevent overlapping audio
+interface TtsQueueItem {
+  text: string;
+  rate: number;
+  sessionKey: string | null;
+  resolve: (audioId: string) => void;
+  reject: (err: Error) => void;
+}
+const ttsQueue: TtsQueueItem[] = [];
 let ttsPlaying = false;
+
+// Mock rendered audio files map (mirrors unified-server.ts)
+const renderedAudioFiles = new Map<string, { filePath: string; createdAt: number }>();
 
 async function processTtsQueue() {
   if (ttsPlaying || ttsQueue.length === 0) return;
   ttsPlaying = true;
   const item = ttsQueue.shift()!;
   try {
-    await execAsync(`say -r ${item.rate} "${item.text.replace(/"/g, '\\"')}"`);
-    item.resolve();
+    // Mock render: generate a fake audioId and store in map
+    const audioId = randomUUID();
+    renderedAudioFiles.set(audioId, { filePath: `/tmp/mcp-voice-hooks-tts-${audioId}.m4a`, createdAt: Date.now() });
+    item.resolve(audioId);
   } catch (error) {
     item.reject(error instanceof Error ? error : new Error(String(error)));
   } finally {
@@ -130,9 +142,9 @@ async function processTtsQueue() {
   }
 }
 
-function enqueueTts(text: string, rate: number): Promise<void> {
+function enqueueTts(text: string, rate: number, sessionKey: string | null = null): Promise<string> {
   return new Promise((resolve, reject) => {
-    ttsQueue.push({ text, rate, resolve, reject });
+    ttsQueue.push({ text, rate, sessionKey, resolve, reject });
     processTtsQueue();
   });
 }
@@ -149,6 +161,7 @@ function clearTtsQueue() {
 interface VoicePreferences {
   voiceResponsesEnabled: boolean;
   voiceInputActive: boolean;
+  selectedVoice: string;
 }
 
 // Background voice enforcement: when enabled, inactive sessions must speak after tool use
@@ -192,7 +205,8 @@ export class TestServer {
     this.app = express();
     this.voicePreferences = {
       voiceResponsesEnabled: false,
-      voiceInputActive: false
+      voiceInputActive: false,
+      selectedVoice: 'browser'
     };
 
     this.setupMiddleware();
@@ -519,30 +533,6 @@ export class TestServer {
       }
     });
 
-    // POST /api/speak-system (always works, uses Mac say command)
-    this.app.post('/api/speak-system', async (req, res) => {
-      const { text, rate = 150 } = req.body;
-
-      if (!text || !text.trim()) {
-        res.status(400).json({ error: 'Text is required' });
-        return;
-      }
-
-      try {
-        await enqueueTts(text, rate);
-
-        res.json({
-          success: true,
-          message: 'Text spoken successfully via system voice'
-        });
-      } catch (error) {
-        res.status(500).json({
-          error: 'Failed to speak text via system voice',
-          details: error instanceof Error ? error.message : String(error)
-        });
-      }
-    });
-
     // POST /api/voice-input
     this.app.post('/api/voice-input', (req, res) => {
       const { active } = req.body;
@@ -600,6 +590,34 @@ export class TestServer {
         clearedCount: queueLength,
         stoppedPlaying: wasPlaying
       });
+    });
+
+    // GET /api/tts-audio/:id - serve rendered audio files
+    this.app.get('/api/tts-audio/:id', (req, res) => {
+      const { id } = req.params;
+      const fileInfo = renderedAudioFiles.get(id);
+
+      if (!fileInfo) {
+        res.status(404).json({ error: 'Audio file not found' });
+        return;
+      }
+
+      // Return empty buffer with correct content type (mock)
+      res.set('Content-Type', 'audio/mp4');
+      res.send(Buffer.alloc(0));
+    });
+
+    // POST /api/selected-voice - sync voice selection from browser
+    this.app.post('/api/selected-voice', (req, res) => {
+      const { selectedVoice } = req.body;
+
+      if (!selectedVoice || typeof selectedVoice !== 'string') {
+        res.status(400).json({ error: 'selectedVoice is required' });
+        return;
+      }
+
+      this.voicePreferences.selectedVoice = selectedVoice;
+      res.json({ success: true, selectedVoice });
     });
 
     // POST /api/validate-action
@@ -883,11 +901,13 @@ export class TestServer {
     this.sessions.clear();
     this.voicePreferences = {
       voiceResponsesEnabled: false,
-      voiceInputActive: false
+      voiceInputActive: false,
+      selectedVoice: 'browser'
     };
     this.activeCompositeKey = null;
     this.speakWhitelist.clear();
     this.backgroundVoiceEnforcement = false;
     clearTtsQueue();
+    renderedAudioFiles.clear();
   }
 }
