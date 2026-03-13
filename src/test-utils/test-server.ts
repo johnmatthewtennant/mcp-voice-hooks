@@ -7,7 +7,7 @@ import { randomUUID} from 'crypto';
 import path from 'path';
 
 // Mock execAsync for testing - we don't want to actually run TTS
-const execAsync = async (command: string): Promise<{ stdout: string; stderr: string }> => {
+const execAsync = async (_command: string): Promise<{ stdout: string; stderr: string }> => {
   // Simulate successful execution without actually running the command
   return { stdout: '', stderr: '' };
 };
@@ -142,6 +142,7 @@ function clearTtsQueue() {
     const item = ttsQueue.shift()!;
     item.reject(new Error('TTS queue cleared'));
   }
+  ttsPlaying = false;
 }
 
 // Voice preferences type
@@ -586,6 +587,19 @@ export class TestServer {
       session.queue.clear();
       clearTtsQueue();
       res.json({ success: true });
+    });
+
+    // DELETE /api/tts-queue - clear TTS queue and stop current playback
+    this.app.delete('/api/tts-queue', (_req, res) => {
+      const queueLength = ttsQueue.length;
+      const wasPlaying = ttsPlaying;
+      clearTtsQueue();
+      res.json({
+        success: true,
+        message: 'Cleared TTS queue',
+        clearedCount: queueLength,
+        stoppedPlaying: wasPlaying
+      });
     });
 
     // POST /api/validate-action

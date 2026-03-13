@@ -873,6 +873,20 @@ app.delete('/api/utterances', (_req: Request, res: Response) => {
   });
 });
 
+// Clear TTS queue and kill any running say process
+app.delete('/api/tts-queue', (_req: Request, res: Response) => {
+  const queueLength = ttsQueue.length;
+  const wasPlaying = ttsPlaying;
+  clearTtsQueue();
+  debugLog(`[TTS Queue] DELETE /api/tts-queue - cleared ${queueLength} queued, wasPlaying=${wasPlaying}`);
+  res.json({
+    success: true,
+    message: `Cleared TTS queue`,
+    clearedCount: queueLength,
+    stoppedPlaying: wasPlaying
+  });
+});
+
 // Server-Sent Events for TTS notifications
 // Map from client response to the session key it's viewing (null = active session)
 const ttsClients = new Map<Response, string | null>();
