@@ -157,6 +157,24 @@ This environment variable is used by both:
 
 **Note**: Setting this in `.claude/settings.local.json` is the recommended approach. The environment variable will be available to both the MCP server process and the hook commands.
 
+#### HTTPS (for access from other devices)
+
+Browsers block microphone access on insecure origins. HTTPS is enabled automatically — the server generates a self-signed certificate on first startup and serves HTTPS on port 5112 (HTTP port + 1).
+
+To access from another device, open `https://<your-hostname>.local:5112` and accept the self-signed certificate warning in the browser.
+
+To customize the HTTPS port:
+
+```json
+{
+  "env": {
+    "MCP_VOICE_HOOKS_HTTPS_PORT": "8443"
+  }
+}
+```
+
+To regenerate the certificate (e.g., after a hostname change), delete the `certs/` directory and restart, or run `./scripts/generate-certs.sh`.
+
 #### Browser Auto-Open
 
 When running in MCP-managed mode, the browser will automatically open if no frontend connects within 3 seconds. To disable this behavior:

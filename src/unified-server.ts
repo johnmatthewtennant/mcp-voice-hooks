@@ -3,6 +3,7 @@
 import express from 'express';
 import type { Request, Response } from 'express';
 import http from 'http';
+import https from 'https';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -24,6 +25,7 @@ const __dirname = path.dirname(__filename);
 // Constants
 const WAIT_TIMEOUT_SECONDS = 60;
 const HTTP_PORT = process.env.MCP_VOICE_HOOKS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_PORT) : 5111;
+const HTTPS_PORT = process.env.MCP_VOICE_HOOKS_HTTPS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_HTTPS_PORT) : HTTP_PORT + 1;
 
 // Promisified exec for async/await
 const execAsync = promisify(exec);
@@ -1296,7 +1298,66 @@ httpServer.listen(HTTP_PORT, async () => {
       }
     }, 3000);
   }
+
+  // Start HTTPS server in same process, sharing state with HTTP server
+  startHttpsServer();
 });
+
+// HTTPS server setup — only called from HTTP listen callback to ensure
+// it runs in the same process that owns the HTTP port and shared state.
+function startHttpsServer() {
+  const certsDir = path.join(__dirname, '..', 'certs');
+  const certPath = path.join(certsDir, 'cert.pem');
+  const keyPath = path.join(certsDir, 'key.pem');
+
+  function generateSelfSignedCerts(): boolean {
+    const log = IS_MCP_MANAGED ? console.error : console.log;
+    try {
+      fs.mkdirSync(certsDir, { recursive: true });
+      const hostname = require('os').hostname();
+      const { execSync } = require('child_process');
+      execSync(
+        `openssl req -x509 -newkey rsa:2048 -nodes ` +
+        `-keyout "${keyPath}" -out "${certPath}" ` +
+        `-days 365 -subj "/CN=${hostname}" ` +
+        `-addext "subjectAltName=DNS:${hostname},DNS:${hostname}.local,DNS:localhost,IP:127.0.0.1"`,
+        { stdio: 'pipe' }
+      );
+      log(`[HTTPS] Auto-generated self-signed certificate (CN=${hostname})`);
+      return true;
+    } catch (error) {
+      log(`[HTTPS] Failed to generate certificate: ${error}`);
+      return false;
+    }
+  }
+
+  let certsAvailable = fs.existsSync(certPath) && fs.existsSync(keyPath);
+  if (!certsAvailable) {
+    certsAvailable = generateSelfSignedCerts();
+  }
+
+  if (certsAvailable) {
+    const httpsOptions = {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    };
+    const httpsServer = https.createServer(httpsOptions, app);
+
+    httpsServer.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        const log = IS_MCP_MANAGED ? console.error : console.log;
+        log(`[HTTPS] Port ${HTTPS_PORT} already in use — skipping HTTPS server`);
+      } else {
+        throw err;
+      }
+    });
+
+    httpsServer.listen(HTTPS_PORT, () => {
+      const log = IS_MCP_MANAGED ? console.error : console.log;
+      log(`[HTTPS] Server listening on https://localhost:${HTTPS_PORT}`);
+    });
+  }
+}
 
 // Helper function to get voice response reminder
 function getVoiceResponseReminder(): string {

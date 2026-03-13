@@ -45,6 +45,9 @@ Thumbs.db
 # Claude settings
 .claude/settings.local.json
 
+# TLS certificates
+certs/
+
 # npm package files
 *.tgz
 npm-pack-*
