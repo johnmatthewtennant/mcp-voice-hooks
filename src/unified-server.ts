@@ -1078,7 +1078,6 @@ interface WsAudioClient {
   isCapturing: boolean;       // true between audio-start and audio-stop
   frameCount: number;         // binary frames received
   byteCount: number;          // total bytes of audio data received
-  connectedAt: Date;
   pingTimer: ReturnType<typeof setInterval> | null;
   ttsActive: boolean;         // true between tts-start and tts-end
   currentAudioId: string | null; // audioId of current TTS stream
@@ -1097,7 +1096,6 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
     isCapturing: false,
     frameCount: 0,
     byteCount: 0,
-    connectedAt: new Date(),
     pingTimer: null,
     ttsActive: false,
     currentAudioId: null,

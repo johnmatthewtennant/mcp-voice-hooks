@@ -983,10 +983,8 @@ class MessengerClient {
             // Unlock AudioPlayer on user gesture (iOS Safari requirement)
             await this.audioPlayer.unlock();
 
-            // Open WebSocket and start audio capture alongside Web Speech API
+            // Open WebSocket; audio capture starts from the onopen callback
             this.connectAudioWebSocket();
-            // Wait briefly for WS to connect before starting capture
-            setTimeout(() => this.startAudioCapture(), 200);
 
             // Activate voice input when mic is on
             await this.updateVoiceInputState(true);
@@ -1263,6 +1261,8 @@ class MessengerClient {
             this.debugLog('[WS] Connected');
             this.wsConnected = true;
             this.wsReconnectDelay = 1000; // Reset backoff on successful connect
+            // Start audio capture now that the WS connection is ready
+            this.startAudioCapture();
         };
 
         this.audioWs.onmessage = (event) => {
@@ -1273,19 +1273,21 @@ class MessengerClient {
                 } catch (e) {
                     console.error('[WS] Failed to parse message:', e);
                 }
-            }
             } else if (event.data instanceof ArrayBuffer) {
                 // Binary frame = TTS audio PCM data
                 if (this.audioPlayer.ttsActive) {
                     this.audioPlayer.playPCMChunk(event.data);
                 }
-                return;
+            }
         };
 
         this.audioWs.onclose = () => {
             this.debugLog('[WS] Disconnected');
             this.wsConnected = false;
             this.audioWs = null;
+            // Reset TTS playback state and unmute mic on disconnect
+            this.audioPlayer.clear();
+            this._micMuted = false;
             // Reconnect if still listening
             if (this.isListening) {
                 this.scheduleWsReconnect();
@@ -1407,8 +1409,12 @@ class MessengerClient {
             };
 
             source.connect(this.audioWorkletNode);
-            // Connect to destination to keep the worklet processing (required)
-            this.audioWorkletNode.connect(this.audioContext.destination);
+            // Connect through a silent GainNode to keep the worklet processing
+            // without playing captured audio through speakers (avoids feedback)
+            const silentGain = this.audioContext.createGain();
+            silentGain.gain.value = 0;
+            this.audioWorkletNode.connect(silentGain);
+            silentGain.connect(this.audioContext.destination);
 
             // Send audio-start control message
             if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
