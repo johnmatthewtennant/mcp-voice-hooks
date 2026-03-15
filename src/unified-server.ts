@@ -36,17 +36,6 @@ const execAsync = promisify(exec);
 // Server-wide event emitter for cross-component signals
 const serverEvents = new EventEmitter();
 
-// Function to play a sound notification
-async function playNotificationSound() {
-  try {
-    // Use macOS system sound
-    await execAsync('afplay /System/Library/Sounds/Funk.aiff');
-    debugLog('[Sound] Played notification sound');
-  } catch (error) {
-    debugLog(`[Sound] Failed to play sound: ${error}`);
-    // Don't throw - sound is not critical
-  }
-}
 
 // TTS audio queue - serializes say -o renders to prevent CPU overload
 interface TtsQueueItem {
@@ -556,8 +545,7 @@ async function waitForUtteranceCore(session?: SessionState) {
 
     if (firstTime) {
       firstTime = false;
-      // Play notification sound since we're about to start waiting
-      await playNotificationSound();
+      // Chime is now played in the browser via waitStatus SSE event
     }
 
     // Wait 100ms before checking again, but wake immediately on client disconnect

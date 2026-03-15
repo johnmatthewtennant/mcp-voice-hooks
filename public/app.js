@@ -212,6 +212,46 @@ class MessengerClient {
                 this.scrollToBottom();
             }
         }
+        // Play a chime when Claude starts waiting for input
+        if (isWaiting) {
+            this.playWaitingChime();
+        }
+    }
+
+    playWaitingChime() {
+        try {
+            const ctx = new AudioContext();
+            const now = ctx.currentTime;
+
+            // First note: 880Hz for 100ms
+            const osc1 = ctx.createOscillator();
+            const gain1 = ctx.createGain();
+            osc1.frequency.value = 880;
+            osc1.type = 'sine';
+            gain1.gain.setValueAtTime(0.3, now);
+            gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+            osc1.connect(gain1);
+            gain1.connect(ctx.destination);
+            osc1.start(now);
+            osc1.stop(now + 0.1);
+
+            // Second note: 1100Hz for 100ms
+            const osc2 = ctx.createOscillator();
+            const gain2 = ctx.createGain();
+            osc2.frequency.value = 1100;
+            osc2.type = 'sine';
+            gain2.gain.setValueAtTime(0.3, now + 0.1);
+            gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+            osc2.connect(gain2);
+            gain2.connect(ctx.destination);
+            osc2.start(now + 0.1);
+            osc2.stop(now + 0.2);
+
+            // Clean up the context after the chime finishes
+            setTimeout(() => ctx.close(), 300);
+        } catch (e) {
+            console.warn('Could not play waiting chime:', e);
+        }
     }
 
     initializeSessionSidebar() {
