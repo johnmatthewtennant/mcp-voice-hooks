@@ -29,6 +29,8 @@ function createTestWsServer(): Promise<{ server: http.Server; wss: WebSocketServ
       frameCount: number;
       byteCount: number;
       pingTimer: ReturnType<typeof setInterval> | null;
+      ttsActive: boolean;
+      currentAudioId: string | null;
     }
 
     const wsAudioClients = new Set<WsAudioClient>();
@@ -44,6 +46,8 @@ function createTestWsServer(): Promise<{ server: http.Server; wss: WebSocketServ
         frameCount: 0,
         byteCount: 0,
         pingTimer: null,
+        ttsActive: false,
+        currentAudioId: null,
       };
 
       wsAudioClients.add(client);
@@ -71,6 +75,9 @@ function createTestWsServer(): Promise<{ server: http.Server; wss: WebSocketServ
                 break;
               case 'audio-stop':
                 client.isCapturing = false;
+                break;
+              case 'tts-ack':
+                // Acknowledge TTS playback completion
                 break;
               case 'ping':
                 ws.send(JSON.stringify({ type: 'pong' }));
@@ -301,6 +308,160 @@ describe('WebSocket Audio Endpoint', () => {
       ws.ping();
 
       await pongPromise;
+      ws.close();
+    });
+  });
+
+  describe('TTS Binary Frame Streaming', () => {
+    it('should send tts-start, binary PCM chunks, and tts-end', async () => {
+      const ws = await connectWs();
+      const receivedMessages: any[] = [];
+      const receivedBinaryFrames: Buffer[] = [];
+
+      ws.on('message', (data: Buffer | string, isBinary: boolean) => {
+        if (isBinary) {
+          receivedBinaryFrames.push(data as Buffer);
+        } else {
+          receivedMessages.push(JSON.parse(data.toString()));
+        }
+      });
+
+      // Simulate server sending TTS audio
+      const audioId = 'test-audio-123';
+      const sampleRate = 22050;
+
+      // Find the server-side WS for this client and send TTS data
+      // We access the wss connections directly
+      for (const client of testServer.wss.clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          // Send tts-start
+          client.send(JSON.stringify({
+            type: 'tts-start',
+            audioId,
+            sampleRate,
+            channels: 1,
+          }));
+
+          // Send PCM chunks (simulating 4096-byte chunks)
+          const chunk1 = Buffer.alloc(4096);
+          const chunk2 = Buffer.alloc(4096);
+          const chunk3 = Buffer.alloc(2048); // last chunk can be smaller
+          client.send(chunk1);
+          client.send(chunk2);
+          client.send(chunk3);
+
+          // Send tts-end
+          client.send(JSON.stringify({
+            type: 'tts-end',
+            audioId,
+          }));
+        }
+      }
+
+      // Wait for messages to arrive
+      await new Promise(r => setTimeout(r, 100));
+
+      // Verify tts-start was received
+      const startMsg = receivedMessages.find(m => m.type === 'tts-start');
+      expect(startMsg).toBeDefined();
+      expect(startMsg.audioId).toBe(audioId);
+      expect(startMsg.sampleRate).toBe(sampleRate);
+      expect(startMsg.channels).toBe(1);
+
+      // Verify binary frames received
+      expect(receivedBinaryFrames.length).toBe(3);
+      expect(receivedBinaryFrames[0].length).toBe(4096);
+      expect(receivedBinaryFrames[1].length).toBe(4096);
+      expect(receivedBinaryFrames[2].length).toBe(2048);
+
+      // Verify tts-end was received
+      const endMsg = receivedMessages.find(m => m.type === 'tts-end');
+      expect(endMsg).toBeDefined();
+      expect(endMsg.audioId).toBe(audioId);
+
+      ws.close();
+    });
+
+    it('should handle tts-ack from client', async () => {
+      const ws = await connectWs();
+
+      // Send tts-ack
+      ws.send(JSON.stringify({ type: 'tts-ack', audioId: 'test-audio-123' }));
+
+      // Should not error
+      await new Promise(r => setTimeout(r, 50));
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+
+      ws.close();
+    });
+
+    it('should handle tts-clear message', async () => {
+      const ws = await connectWs();
+      const receivedMessages: any[] = [];
+
+      ws.on('message', (data: Buffer | string, isBinary: boolean) => {
+        if (!isBinary) {
+          receivedMessages.push(JSON.parse(data.toString()));
+        }
+      });
+
+      // Server sends tts-clear
+      for (const client of testServer.wss.clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'tts-clear' }));
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 50));
+
+      const clearMsg = receivedMessages.find(m => m.type === 'tts-clear');
+      expect(clearMsg).toBeDefined();
+
+      ws.close();
+    });
+
+    it('should handle multiple TTS streams sequentially', async () => {
+      const ws = await connectWs();
+      const receivedMessages: any[] = [];
+      const receivedBinaryFrames: Buffer[] = [];
+
+      ws.on('message', (data: Buffer | string, isBinary: boolean) => {
+        if (isBinary) {
+          receivedBinaryFrames.push(data as Buffer);
+        } else {
+          receivedMessages.push(JSON.parse(data.toString()));
+        }
+      });
+
+      // Send two sequential TTS streams
+      for (const client of testServer.wss.clients) {
+        if (client.readyState === WebSocket.OPEN) {
+          // First stream
+          client.send(JSON.stringify({ type: 'tts-start', audioId: 'audio-1', sampleRate: 22050, channels: 1 }));
+          client.send(Buffer.alloc(4096));
+          client.send(JSON.stringify({ type: 'tts-end', audioId: 'audio-1' }));
+
+          // Second stream
+          client.send(JSON.stringify({ type: 'tts-start', audioId: 'audio-2', sampleRate: 22050, channels: 1 }));
+          client.send(Buffer.alloc(4096));
+          client.send(Buffer.alloc(4096));
+          client.send(JSON.stringify({ type: 'tts-end', audioId: 'audio-2' }));
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 100));
+
+      // Verify both streams received
+      const starts = receivedMessages.filter(m => m.type === 'tts-start');
+      const ends = receivedMessages.filter(m => m.type === 'tts-end');
+      expect(starts.length).toBe(2);
+      expect(ends.length).toBe(2);
+      expect(starts[0].audioId).toBe('audio-1');
+      expect(starts[1].audioId).toBe('audio-2');
+
+      // 1 chunk from first + 2 chunks from second = 3 binary frames
+      expect(receivedBinaryFrames.length).toBe(3);
+
       ws.close();
     });
   });
