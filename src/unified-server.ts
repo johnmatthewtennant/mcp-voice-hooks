@@ -64,9 +64,16 @@ async function processTtsQueue() {
   ttsPlaying = true;
   const item = ttsQueue.shift()!;
   try {
-    const { audioId } = await renderTtsToFile(item.text, item.rate);
-    // Notify browser with audio URL, routed to correct session
-    notifyTTSAudio(`/api/tts-audio/${audioId}`, item.sessionKey);
+    const { audioId, filePath } = await renderTtsToFile(item.text, item.rate);
+    // Check if a WS client is connected for this session — prefer WS delivery
+    const targetKey = item.sessionKey || activeCompositeKey;
+    const wsClient = findWsClientForSession(targetKey);
+    if (wsClient && wsClient.ws.readyState === WebSocket.OPEN) {
+      await streamTtsOverWs(wsClient, filePath, audioId);
+    } else {
+      // Fall back to SSE + HTTP WAV file fetch
+      notifyTTSAudio(`/api/tts-audio/${audioId}`, item.sessionKey);
+    }
     item.resolve(audioId);
   } catch (error) {
     item.reject(error instanceof Error ? error : new Error(String(error)));
@@ -1027,9 +1034,16 @@ function notifyTTSAudio(audioUrl: string, sessionKey: string | null) {
 // Helper function to notify TTS clients to clear their audio playback queue
 function notifyTTSClear() {
   const message = JSON.stringify({ type: 'tts-clear' });
+  // Send to SSE clients
   ttsClients.forEach((_viewingKey, client) => {
     client.write(`data: ${message}\n\n`);
   });
+  // Send to WS clients
+  for (const client of wsAudioClients) {
+    if (client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(message);
+    }
+  }
 }
 
 // Helper function to notify all SSE clients that a new Claude session started
