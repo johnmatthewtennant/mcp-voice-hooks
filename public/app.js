@@ -7,6 +7,7 @@ class AudioPlayer {
         this.gainNode = null;
         this.ttsActive = false;
         this.currentAudioId = null;
+        this.isFirstChunk = true;
     }
 
     // Must be called on user gesture (e.g., Start Listening tap)
@@ -28,6 +29,7 @@ class AudioPlayer {
     prepareForPlayback(sampleRate, audioId) {
         this.ttsActive = true;
         this.currentAudioId = audioId;
+        this.isFirstChunk = true;
         // Only reset scheduling if no audio is queued — otherwise new audio
         // should play after the currently scheduled audio finishes
         if (this.playbackContext && this.nextStartTime < this.playbackContext.currentTime) {

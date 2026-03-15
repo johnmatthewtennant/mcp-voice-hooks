@@ -1271,7 +1271,20 @@ function findWsClientForSession(targetKey: string | null): WsAudioClient | null 
 
 // Stream rendered TTS WAV file as PCM chunks over WebSocket
 const TTS_WS_CHUNK_SIZE = 4096; // bytes per binary frame
-const WAV_HEADER_SIZE = 44;     // standard WAV header
+// Find the 'data' chunk offset in a WAV file by parsing RIFF chunks.
+// macOS `say` writes JUNK and FLLR padding chunks, so the data chunk
+// starts at byte ~4096 instead of the standard 44.
+function findWavDataOffset(buf: Buffer): number {
+  let offset = 12; // skip RIFF header (4 'RIFF' + 4 size + 4 'WAVE')
+  while (offset + 8 <= buf.length) {
+    const chunkId = buf.subarray(offset, offset + 4).toString('ascii');
+    const chunkSize = buf.readUInt32LE(offset + 4);
+    offset += 8;
+    if (chunkId === 'data') return offset;
+    offset += chunkSize;
+  }
+  return 44; // fallback
+}
 
 async function streamTtsOverWs(client: WsAudioClient, filePath: string, audioId: string): Promise<void> {
   const { ws } = client;
@@ -1287,9 +1300,10 @@ async function streamTtsOverWs(client: WsAudioClient, filePath: string, audioId:
   client.ttsActive = true;
   client.currentAudioId = audioId;
 
-  // Read WAV file, strip header, send PCM data in chunks
+  // Read WAV file, find actual data chunk, send PCM data in chunks
   const fileData = await fs.promises.readFile(filePath);
-  const pcmData = fileData.subarray(WAV_HEADER_SIZE);
+  const dataOffset = findWavDataOffset(fileData);
+  const pcmData = fileData.subarray(dataOffset);
 
   for (let offset = 0; offset < pcmData.length; offset += TTS_WS_CHUNK_SIZE) {
     if (ws.readyState !== WebSocket.OPEN) break;
