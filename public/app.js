@@ -214,6 +214,22 @@ class MessengerClient {
         }
         // Play a chime when Claude starts waiting for input
         if (isWaiting) {
+            this.playWaitingChimeWhenReady();
+        }
+    }
+
+    playWaitingChimeWhenReady() {
+        // Wait for any TTS audio to finish before playing the chime
+        if (this.audioPlayer.isPlaying()) {
+            const checkDone = () => {
+                if (!this.audioPlayer.isPlaying()) {
+                    this.playWaitingChime();
+                } else {
+                    setTimeout(checkDone, 100);
+                }
+            };
+            setTimeout(checkDone, 100);
+        } else {
             this.playWaitingChime();
         }
     }
