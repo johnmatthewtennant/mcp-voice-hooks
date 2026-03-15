@@ -15,6 +15,7 @@ import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
+import { SpeechRecognizer } from './speech-recognition.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
@@ -213,6 +214,8 @@ class UtteranceQueue {
 
 // Determine if we're running in MCP-managed mode
 const IS_MCP_MANAGED = process.argv.includes('--mcp-managed');
+const NO_TRANSCRIBE = process.argv.includes('--no-transcribe') || process.env.MCP_VOICE_HOOKS_NO_TRANSCRIBE === 'true';
+const SPEECH_RECOGNIZER_AVAILABLE = !NO_TRANSCRIBE && SpeechRecognizer.binaryExists(path.join(__dirname, '..'));
 
 // Voice preferences (controlled by browser)
 let voicePreferences = {
@@ -1081,6 +1084,7 @@ interface WsAudioClient {
   pingTimer: ReturnType<typeof setInterval> | null;
   ttsActive: boolean;         // true between tts-start and tts-end
   currentAudioId: string | null; // audioId of current TTS stream
+  recognizer: SpeechRecognizer | null; // speech recognition process (Phase 2)
 }
 
 const wsAudioClients = new Set<WsAudioClient>();
@@ -1099,6 +1103,7 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
     pingTimer: null,
     ttsActive: false,
     currentAudioId: null,
+    recognizer: null,
   };
 
   wsAudioClients.add(client);
@@ -1126,7 +1131,10 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
         // Log every ~1 second (50 frames * 20ms = 1s)
         debugLog(`[WS] Audio: frame=${client.frameCount} bytes=${client.byteCount} (this=${buf.length})`);
       }
-      // Phase 1: just receive and count. Phase 2 will pipe to speech recognizer.
+      // Pipe audio to speech recognizer if available
+      if (client.recognizer) {
+        client.recognizer.feedAudio(buf);
+      }
     } else {
       // Text frame = JSON control message
       try {
@@ -1141,6 +1149,11 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
 
   ws.on('close', () => {
     if (client.pingTimer) clearInterval(client.pingTimer);
+    // Stop speech recognizer on disconnect
+    if (client.recognizer) {
+      client.recognizer.kill();
+      client.recognizer = null;
+    }
     wsAudioClients.delete(client);
     debugLog(`[WS] Audio client disconnected: session=${sessionKey || 'active'} frames=${client.frameCount} bytes=${client.byteCount} (${wsAudioClients.size} remaining)`);
 
@@ -1167,11 +1180,20 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       client.frameCount = 0;
       client.byteCount = 0;
       debugLog(`[WS] audio-start: sampleRate=${msg.sampleRate} channels=${msg.channels} encoding=${msg.encoding}`);
+      // Start speech recognizer if available
+      if (SPEECH_RECOGNIZER_AVAILABLE && !client.recognizer) {
+        startRecognizerForClient(client);
+      }
       break;
 
     case 'audio-stop':
       client.isCapturing = false;
       debugLog(`[WS] audio-stop: total frames=${client.frameCount} bytes=${client.byteCount}`);
+      // Stop speech recognizer gracefully (close stdin to flush remaining results)
+      if (client.recognizer) {
+        client.recognizer.stop();
+        client.recognizer = null;
+      }
       break;
 
     case 'tts-ack':
@@ -1186,6 +1208,53 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       debugLog(`[WS] Unknown message type: ${msg.type}`);
       break;
   }
+}
+
+// Start a SpeechRecognizer for a WebSocket client and wire up events
+function startRecognizerForClient(client: WsAudioClient): void {
+  const repoRoot = path.join(__dirname, '..');
+  const recognizer = new SpeechRecognizer(repoRoot);
+
+  recognizer.on('transcript', (result: { type: string; text: string }) => {
+    if (client.ws.readyState !== WebSocket.OPEN) return;
+
+    if (result.type === 'interim') {
+      client.ws.send(JSON.stringify({
+        type: 'transcript-interim',
+        text: result.text,
+      }));
+    } else if (result.type === 'final' && result.text.trim()) {
+      const utteranceId = randomUUID();
+      // Create utterance directly in the server queue (no browser round-trip)
+      const session = getActiveSessionOrFirst();
+      session.queue.add(result.text.trim());
+
+      client.ws.send(JSON.stringify({
+        type: 'transcript-final',
+        text: result.text.trim(),
+        utteranceId,
+      }));
+
+      debugLog(`[SpeechRecognizer] Final transcript → utterance created: "${result.text.trim()}"`);
+    }
+  });
+
+  recognizer.on('error', (err: Error) => {
+    debugLog(`[SpeechRecognizer] Error: ${err.message}`);
+    if (client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(JSON.stringify({ type: 'error', message: `Speech recognition error: ${err.message}` }));
+    }
+  });
+
+  recognizer.on('exit', (_code: number | null, _signal: string | null) => {
+    // If the client is still capturing and recognizer crashed, it will auto-restart
+    // via the SpeechRecognizer class. We just need to re-assign when it restarts.
+  });
+
+  client.recognizer = recognizer;
+  recognizer.start();
+
+  debugLog('[SpeechRecognizer] Started for WS client');
 }
 
 // Find a connected WebSocket client for a given session key
@@ -1293,6 +1362,11 @@ app.post('/api/voice-input-state', (req: Request, res: Response) => {
     success: true,
     voiceInputActive: voicePreferences.voiceInputActive
   });
+});
+
+// API to check if server-side speech recognition is available
+app.get('/api/speech-recognition-available', (_req: Request, res: Response) => {
+  res.json({ available: SPEECH_RECOGNIZER_AVAILABLE });
 });
 
 // API for background voice enforcement

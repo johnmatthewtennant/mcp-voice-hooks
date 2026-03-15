@@ -28,8 +28,9 @@ class AudioPlayer {
     prepareForPlayback(sampleRate, audioId) {
         this.ttsActive = true;
         this.currentAudioId = audioId;
-        // Reset scheduling so new audio starts from "now"
-        if (this.playbackContext) {
+        // Only reset scheduling if no audio is queued — otherwise new audio
+        // should play after the currently scheduled audio finishes
+        if (this.playbackContext && this.nextStartTime < this.playbackContext.currentTime) {
             this.nextStartTime = this.playbackContext.currentTime;
         }
     }
@@ -102,10 +103,8 @@ class MessengerClient {
         this.messageInput = document.getElementById('messageInput');
         this.micBtn = document.getElementById('micBtn');
 
-        // Send mode controls
-        this.sendModeRadios = document.querySelectorAll('input[name="sendMode"]');
-        this.triggerWordInputContainer = document.getElementById('triggerWordInputContainer');
-        this.triggerWordInput = document.getElementById('triggerWordInput');
+        // Recognition mode
+        this.recognitionModeSelect = document.getElementById('recognitionModeSelect');
 
         // Settings
         this.settingsToggleHeader = document.getElementById('settingsToggleHeader');
@@ -130,11 +129,10 @@ class MessengerClient {
         this.backgroundEnforcementToggle = document.getElementById('backgroundEnforcementToggle');
 
         // State
-        this.sendMode = 'automatic'; // 'automatic' or 'trigger'
-        this.triggerWord = 'send';
+        this.recognitionMode = 'server'; // 'server' or 'browser'
+        this.serverRecognitionAvailable = false; // set from server check
         this.isListening = false;
         this.isInterimText = false;
-        this.accumulatedText = ''; // For trigger word mode
         this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
 
         // TTS state
@@ -172,6 +170,7 @@ class MessengerClient {
         this.initializeSessionSidebar();
         this.setupEventListeners();
         this.loadPreferences();
+        this.checkServerRecognition();
         this.loadData();
 
         // Auto-refresh every 2 seconds
@@ -564,8 +563,50 @@ class MessengerClient {
             if (this.speechRateInput) this.speechRateInput.value = this.speechRate.toFixed(1);
         }
 
+        // Load recognition mode
+        const savedRecognitionMode = localStorage.getItem('recognitionMode');
+        if (savedRecognitionMode) {
+            this.recognitionMode = savedRecognitionMode;
+        }
+
         // Sync selected voice to server on load
         this.syncSelectedVoiceToServer();
+    }
+
+    async checkServerRecognition() {
+        try {
+            const response = await fetch(`${this.baseUrl}/api/speech-recognition-available`);
+            if (response.ok) {
+                const data = await response.json();
+                this.serverRecognitionAvailable = data.available;
+            }
+        } catch (error) {
+            this.debugLog('Failed to check server recognition:', error);
+            this.serverRecognitionAvailable = false;
+        }
+
+        // If server recognition not available, fall back to browser
+        if (!this.serverRecognitionAvailable && this.recognitionMode === 'server') {
+            this.recognitionMode = 'browser';
+        }
+
+        // Update UI
+        if (this.recognitionModeSelect) {
+            this.recognitionModeSelect.value = this.recognitionMode;
+            // Disable server option if not available
+            const serverOption = this.recognitionModeSelect.querySelector('option[value="server"]');
+            if (serverOption) {
+                serverOption.disabled = !this.serverRecognitionAvailable;
+                serverOption.textContent = this.serverRecognitionAvailable
+                    ? 'Server Recognition'
+                    : 'Server Recognition (unavailable)';
+            }
+        }
+    }
+
+    /** Whether the active recognition mode uses server-side transcription. */
+    get useServerRecognition() {
+        return this.recognitionMode === 'server' && this.serverRecognitionAvailable && this.wsConnected;
     }
 
     populateLanguageFilter() {
@@ -688,19 +729,13 @@ class MessengerClient {
         // Microphone button
         this.micBtn.addEventListener('click', () => this.toggleVoiceDictation());
 
-        // Send mode radio buttons
-        this.sendModeRadios.forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                this.sendMode = e.target.value;
-                this.triggerWordInputContainer.style.display =
-                    this.sendMode === 'trigger' ? 'flex' : 'none';
+        // Recognition mode selector
+        if (this.recognitionModeSelect) {
+            this.recognitionModeSelect.addEventListener('change', (e) => {
+                this.recognitionMode = e.target.value;
+                localStorage.setItem('recognitionMode', this.recognitionMode);
             });
-        });
-
-        // Trigger word input
-        this.triggerWordInput.addEventListener('input', (e) => {
-            this.triggerWord = e.target.value.trim().toLowerCase();
-        });
+        }
 
         // Settings toggle
         this.settingsToggleHeader.addEventListener('click', () => {
@@ -965,18 +1000,12 @@ class MessengerClient {
     }
 
     async startVoiceDictation() {
-        if (!this.recognition) {
-            alert('Speech recognition not supported in this browser');
-            return;
-        }
-
         try {
             if (this.isInterimText) {
                 this.messageInput.value = '';
                 this.isInterimText = false;
             }
 
-            this.recognition.start();
             this.isListening = true;
             this.micBtn.classList.add('listening');
 
@@ -985,6 +1014,11 @@ class MessengerClient {
 
             // Open WebSocket; audio capture starts from the onopen callback
             this.connectAudioWebSocket();
+
+            // Start browser speech recognition only if NOT using server recognition
+            if (!this.useServerRecognition && this.recognition) {
+                this.recognition.start();
+            }
 
             // Activate voice input when mic is on
             await this.updateVoiceInputState(true);
@@ -995,39 +1029,28 @@ class MessengerClient {
     }
 
     async stopVoiceDictation() {
+        this.isListening = false;
         if (this.recognition) {
-            this.isListening = false;
             this.recognition.stop();
-            this.micBtn.classList.remove('listening');
-
-            // Send any accumulated text in the input
-            const text = this.messageInput.value.trim();
-            if (text) {
-                // In trigger mode, check for trigger word
-                if (this.sendMode === 'trigger') {
-                    if (this.containsTriggerWord(text)) {
-                        const textToSend = this.removeTriggerWord(text);
-                        await this.sendMessage(textToSend);
-                        this.messageInput.value = '';
-                    }
-                    // If no trigger word, keep text in input for user to continue
-                } else {
-                    // In automatic mode, send the text
-                    await this.sendMessage(text);
-                    this.messageInput.value = '';
-                }
-            }
-
-            this.isInterimText = false;
-            this.messageInput.style.height = 'auto';
-
-            // Stop audio capture and disconnect WebSocket
-            this.stopAudioCapture();
-            this.disconnectAudioWebSocket();
-
-            // Deactivate voice input when mic is turned off
-            await this.updateVoiceInputState(false);
         }
+        this.micBtn.classList.remove('listening');
+
+        // Send any accumulated text in the input (from browser recognition)
+        const text = this.messageInput.value.trim();
+        if (text && !this.isInterimText) {
+            await this.sendMessage(text);
+            this.messageInput.value = '';
+        }
+
+        this.isInterimText = false;
+        this.messageInput.style.height = 'auto';
+
+        // Stop audio capture and disconnect WebSocket
+        this.stopAudioCapture();
+        this.disconnectAudioWebSocket();
+
+        // Deactivate voice input when mic is turned off
+        await this.updateVoiceInputState(false);
     }
 
     initializeSpeechRecognition() {
@@ -1035,7 +1058,6 @@ class MessengerClient {
 
         if (!SpeechRecognition) {
             console.error('Speech recognition not supported');
-            this.micBtn.disabled = true;
             return;
         }
 
@@ -1045,65 +1067,26 @@ class MessengerClient {
         this.recognition.lang = 'en-US';
 
         this.recognition.onresult = (event) => {
+            // Skip browser recognition results when using server recognition
+            if (this.useServerRecognition) return;
+
             let interimTranscript = '';
 
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const transcript = event.results[i][0].transcript;
 
                 if (event.results[i].isFinal) {
-                    // User paused
                     this.isInterimText = false;
-
-                    if (this.sendMode === 'automatic') {
-                        // Send immediately
-                        const finalText = this.messageInput.value.trim();
-                        this.sendMessage(finalText);
-                        this.messageInput.value = '';
-                        this.accumulatedText = '';
-                    } else {
-                        // Trigger word mode: accumulate until trigger word
-                        // Use the previously saved accumulated text (before interim was shown)
-                        const previouslyAccumulated = this.accumulatedText || '';
-                        const newUtterance = transcript.trim();
-
-                        // Check if this new utterance contains the trigger word
-                        if (this.containsTriggerWord(newUtterance)) {
-                            // Send everything accumulated plus this utterance (minus trigger word)
-                            const combined = previouslyAccumulated
-                                ? previouslyAccumulated + ' ' + newUtterance
-                                : newUtterance;
-                            const textToSend = this.removeTriggerWord(combined).trim();
-                            if (textToSend) {
-                                this.sendMessage(textToSend);
-                            }
-                            this.messageInput.value = '';
-                            this.accumulatedText = '';
-                        } else {
-                            // No trigger word - append with space (no newlines)
-                            const newAccumulated = previouslyAccumulated
-                                ? previouslyAccumulated + ' ' + newUtterance
-                                : newUtterance;
-                            this.messageInput.value = newAccumulated;
-                            this.accumulatedText = newAccumulated;
-                            this.autoGrowTextarea();
-                        }
-                    }
+                    const finalText = this.messageInput.value.trim();
+                    this.sendMessage(finalText);
+                    this.messageInput.value = '';
                 } else {
-                    // Still speaking
                     interimTranscript += transcript;
                 }
             }
 
             if (interimTranscript) {
-                // In trigger mode, preserve accumulated text and append interim
-                if (this.sendMode === 'trigger' && this.accumulatedText) {
-                    // Show accumulated + interim with single space
-                    this.messageInput.value = this.accumulatedText + ' ' + interimTranscript.trim();
-                } else {
-                    // Show just interim
-                    this.messageInput.value = interimTranscript;
-                }
-
+                this.messageInput.value = interimTranscript;
                 this.isInterimText = true;
                 this.autoGrowTextarea();
             }
@@ -1117,7 +1100,8 @@ class MessengerClient {
         };
 
         this.recognition.onend = () => {
-            if (this.isListening) {
+            // Only restart browser recognition if listening and not using server
+            if (this.isListening && !this.useServerRecognition) {
                 try {
                     this.recognition.start();
                 } catch (e) {
@@ -1126,19 +1110,6 @@ class MessengerClient {
                 }
             }
         };
-    }
-
-    containsTriggerWord(text) {
-        if (!this.triggerWord) return false;
-        const words = text.toLowerCase().split(/\s+/);
-        return words.includes(this.triggerWord.toLowerCase());
-    }
-
-    removeTriggerWord(text) {
-        if (!this.triggerWord) return text;
-        const words = text.split(/\s+/);
-        const filtered = words.filter(w => w.toLowerCase() !== this.triggerWord.toLowerCase());
-        return filtered.join(' ');
     }
 
     async deleteMessage(messageId) {
@@ -1301,6 +1272,24 @@ class MessengerClient {
 
     handleWsMessage(msg) {
         switch (msg.type) {
+            case 'transcript-interim':
+                // Display interim transcript in the message input (display only)
+                if (this.useServerRecognition) {
+                    this.messageInput.value = msg.text;
+                    this.isInterimText = true;
+                    this.autoGrowTextarea();
+                }
+                break;
+            case 'transcript-final':
+                // Server already created the utterance — just display it
+                if (this.useServerRecognition) {
+                    this.messageInput.value = '';
+                    this.isInterimText = false;
+                    this.messageInput.style.height = 'auto';
+                    // Refresh conversation to show the new message
+                    this.loadData();
+                }
+                break;
             case 'tts-start':
                 console.log('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate);
                 this.audioPlayer.prepareForPlayback(msg.sampleRate, msg.audioId);
