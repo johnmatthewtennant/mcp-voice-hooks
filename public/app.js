@@ -93,6 +93,339 @@ class AudioPlayer {
     }
 }
 
+// VoiceStateMachine: manages ambient audio feedback based on Claude's state
+// Uses a derived-state reducer: desiredState = f(isListening, waitStatusKnown, lastWaitStatus, ttsActive)
+// States: inactive, listening, processing, speaking
+class VoiceStateMachine {
+    // Maximum volume for ALL state machine audio (ambient + chime).
+    // masterGain is set to this value so nothing exceeds it.
+    static MAX_VOLUME = 0.3;
+
+    constructor(audioPlayer) {
+        this.audioPlayer = audioPlayer; // reference for isPlaying() checks
+        this.state = 'inactive';
+        this.audioCtx = null; // lazy-init on first use
+        this.masterGain = null; // master gain node — caps all output
+        this.ambientNodes = null; // currently playing ambient sound graph
+        this._chimePending = false;
+        this._chimeTimerId = null; // track setTimeout for cleanup
+        this._pulseTimerId = null; // track setInterval for ambient pulses
+
+        // Input signals for the derived-state reducer
+        this._isListening = false;
+        this._waitStatusKnown = false; // true after first setWaitStatus() call in a session
+        this._lastWaitStatus = false; // last known waitStatus from server
+        this._ttsActive = false;
+    }
+
+    // --- Derived-State Reducer ---
+    // Call this after updating any input signal. It computes the desired state
+    // and transitions only if the state actually changed.
+
+    syncState() {
+        let desired;
+        if (!this._isListening) {
+            desired = 'inactive';
+        } else if (this._ttsActive) {
+            desired = 'speaking';
+        } else if (!this._waitStatusKnown) {
+            // Mic is on but we haven't received a waitStatus yet —
+            // stay silent until we know what Claude is doing
+            desired = 'inactive';
+        } else if (this._lastWaitStatus) {
+            desired = 'listening';
+        } else {
+            desired = 'processing';
+        }
+        this._transition(desired);
+    }
+
+    // Input signal setters — each updates its signal and calls syncState()
+
+    setListening(isListening) {
+        this._isListening = isListening;
+        if (isListening) {
+            // Reset server-side signals on new session to prevent stale state
+            this._lastWaitStatus = false;
+            this._waitStatusKnown = false;
+            this._ttsActive = false;
+        }
+        this.syncState();
+    }
+
+    setWaitStatus(isWaiting) {
+        this._waitStatusKnown = true;
+        this._lastWaitStatus = isWaiting;
+        this.syncState();
+    }
+
+    setTtsActive(active) {
+        this._ttsActive = active;
+        this.syncState();
+    }
+
+    // --- AudioContext Lifecycle ---
+
+    // Must be called from a user gesture (e.g., mic button click) to satisfy
+    // Safari/iOS autoplay policies. Creates and resumes the AudioContext.
+    async unlock() {
+        if (!this.audioCtx || this.audioCtx.state === 'closed') {
+            this.audioCtx = new AudioContext();
+            this.masterGain = this.audioCtx.createGain();
+            this.masterGain.gain.value = VoiceStateMachine.MAX_VOLUME;
+            this.masterGain.connect(this.audioCtx.destination);
+        }
+        try {
+            await this.audioCtx.resume();
+        } catch (e) {
+            console.warn('VoiceStateMachine: AudioContext resume failed:', e);
+        }
+    }
+
+    // Lazy-init for non-gesture paths (will be suspended on Safari until unlock)
+    _ensureContext() {
+        if (!this.audioCtx || this.audioCtx.state === 'closed') {
+            this.audioCtx = new AudioContext();
+            this.masterGain = this.audioCtx.createGain();
+            this.masterGain.gain.value = VoiceStateMachine.MAX_VOLUME;
+            this.masterGain.connect(this.audioCtx.destination);
+        }
+        if (this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume().catch(() => {});
+        }
+        return this.audioCtx;
+    }
+
+    // --- State Transitions (internal) ---
+
+    _transition(newState) {
+        if (newState === this.state) return;
+        const oldState = this.state;
+        this.state = newState;
+
+        // Stop any current ambient sound
+        this._stopAmbient();
+        // Cancel any pending chime timer
+        this._cancelChimeTimer();
+
+        switch (newState) {
+            case 'inactive':
+                this._chimePending = false;
+                // Let AudioContext suspend to save resources
+                if (this.audioCtx && this.audioCtx.state === 'running') {
+                    this.audioCtx.suspend().catch(() => {});
+                }
+                break;
+
+            case 'listening':
+                // Play transition chime, then start listening ambient
+                this._chimePending = true;
+                this._playChimeWhenReady(() => {
+                    if (this.state === 'listening') {
+                        this._startListeningAmbient();
+                    }
+                });
+                break;
+
+            case 'processing':
+                this._chimePending = false;
+                this._startProcessingAmbient();
+                break;
+
+            case 'speaking':
+                this._chimePending = false;
+                // No ambient sound during TTS — would interfere with speech
+                break;
+        }
+    }
+
+    // --- Ambient Sound Generators ---
+    // Ambient sounds are short pulses every few seconds, NOT continuous tones.
+    // All audio routes through this.masterGain which is capped at MAX_VOLUME.
+
+    _startListeningAmbient() {
+        // Gentle high-pitched pulse every 7 seconds
+        // A soft, warm two-tone "ping" — like a gentle sonar blip
+        this._playListeningPulse(); // play first pulse immediately
+        this._pulseTimerId = setInterval(() => this._playListeningPulse(), 7000);
+    }
+
+    _playListeningPulse() {
+        if (this.state !== 'listening') return;
+        try {
+            const ctx = this._ensureContext();
+            const now = ctx.currentTime;
+
+            // Soft sine at 220Hz, quick fade — a gentle "hum" blip
+            const osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = 220;
+
+            // Add a subtle harmonic at 440Hz for warmth
+            const osc2 = ctx.createOscillator();
+            osc2.type = 'sine';
+            osc2.frequency.value = 440;
+
+            const gain = ctx.createGain();
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.25, now + 0.04);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+            const gain2 = ctx.createGain();
+            gain2.gain.setValueAtTime(0, now);
+            gain2.gain.linearRampToValueAtTime(0.08, now + 0.04);
+            gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+            osc2.connect(gain2);
+            gain2.connect(this.masterGain);
+
+            osc.start(now);
+            osc.stop(now + 0.35);
+            osc2.start(now);
+            osc2.stop(now + 0.3);
+
+            // Cleanup
+            osc.onended = () => {
+                try { osc.disconnect(); gain.disconnect(); } catch (_e) {}
+            };
+            osc2.onended = () => {
+                try { osc2.disconnect(); gain2.disconnect(); } catch (_e) {}
+            };
+        } catch (_e) { /* ignore pulse errors */ }
+    }
+
+    _startProcessingAmbient() {
+        // Low rhythmic pulse every 5 seconds — feels like "working"
+        // Uses a lower frequency and different envelope than listening
+        this._playProcessingPulse(); // play first pulse immediately
+        this._pulseTimerId = setInterval(() => this._playProcessingPulse(), 5000);
+    }
+
+    _playProcessingPulse() {
+        if (this.state !== 'processing') return;
+        try {
+            const ctx = this._ensureContext();
+            const now = ctx.currentTime;
+
+            // Low thump at 90Hz — similar to old heartbeat but gentler
+            const osc = ctx.createOscillator();
+            osc.type = 'sine';
+            osc.frequency.value = 90;
+
+            const gain = ctx.createGain();
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.15, now + 0.03);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+
+            osc.connect(gain);
+            gain.connect(this.masterGain);
+
+            osc.start(now);
+            osc.stop(now + 0.2);
+
+            // Cleanup
+            osc.onended = () => {
+                try { osc.disconnect(); gain.disconnect(); } catch (_e) {}
+            };
+        } catch (_e) { /* ignore pulse errors */ }
+    }
+
+    _stopAmbient() {
+        if (this._pulseTimerId !== null) {
+            clearInterval(this._pulseTimerId);
+            this._pulseTimerId = null;
+        }
+    }
+
+    // --- Transition Chime ---
+
+    _cancelChimeTimer() {
+        if (this._chimeTimerId !== null) {
+            clearTimeout(this._chimeTimerId);
+            this._chimeTimerId = null;
+        }
+        this._chimePending = false;
+    }
+
+    _playChimeWhenReady(onComplete) {
+        // Wait for TTS audio to finish before playing (same logic as existing playWaitingChimeWhenReady)
+        const deadline = Date.now() + 15000;
+        const check = () => {
+            if (!this._chimePending) return;
+            if (!this.audioPlayer.isPlaying()) {
+                this._chimePending = false;
+                this._chimeTimerId = null;
+                this._playChime(onComplete);
+            } else if (Date.now() >= deadline) {
+                this._chimePending = false;
+                this._chimeTimerId = null;
+                this._playChime(onComplete);
+            } else {
+                this._chimeTimerId = setTimeout(check, 100);
+            }
+        };
+        // Delay 500ms to let TTS start streaming (same as existing behavior)
+        this._chimeTimerId = setTimeout(check, 500);
+    }
+
+    _playChime(onComplete) {
+        try {
+            const ctx = this._ensureContext();
+            const now = ctx.currentTime;
+
+            // Two-note ascending chime (same as existing playWaitingChime)
+            // Gain values are relative to masterGain (0.3), so effective peak = 1.0 * 0.3 = 0.3
+            const osc1 = ctx.createOscillator();
+            const gain1 = ctx.createGain();
+            osc1.frequency.value = 880;
+            osc1.type = 'sine';
+            gain1.gain.setValueAtTime(1.0, now);
+            gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+            osc1.connect(gain1);
+            gain1.connect(this.masterGain);
+            osc1.start(now);
+            osc1.stop(now + 0.1);
+
+            const osc2 = ctx.createOscillator();
+            const gain2 = ctx.createGain();
+            osc2.frequency.value = 1100;
+            osc2.type = 'sine';
+            gain2.gain.setValueAtTime(1.0, now + 0.1);
+            gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+            osc2.connect(gain2);
+            gain2.connect(this.masterGain);
+            osc2.start(now + 0.1);
+            osc2.stop(now + 0.2);
+
+            // Start ambient after chime finishes; disconnect chime nodes
+            osc2.onended = () => {
+                try { osc1.disconnect(); gain1.disconnect(); } catch (_e) {}
+                try { osc2.disconnect(); gain2.disconnect(); } catch (_e) {}
+                if (onComplete) onComplete();
+            };
+        } catch (e) {
+            console.warn('Could not play chime:', e);
+            if (onComplete) onComplete();
+        }
+    }
+
+    // --- Lifecycle ---
+
+    // Clean shutdown — call on page unload or when destroying the client
+    destroy() {
+        this._stopAmbient();
+        this._cancelChimeTimer();
+        if (this.audioCtx) {
+            this.audioCtx.close().catch(() => {});
+            this.audioCtx = null;
+            this.masterGain = null;
+        }
+        this.state = 'inactive';
+    }
+}
+
 class MessengerClient {
     constructor() {
         this.baseUrl = window.location.origin;
@@ -144,9 +477,8 @@ class MessengerClient {
         this.audioPlayer = new AudioPlayer();
         this.wsConnected = false;
 
-        // Heartbeat state (processing indicator sound)
-        this.heartbeatContext = null;
-        this.heartbeatInterval = null;
+        // Audio feedback state machine
+        this.voiceState = new VoiceStateMachine(this.audioPlayer);
 
         // Session state
         this.sessions = [];
@@ -190,6 +522,7 @@ class MessengerClient {
                     this.syncVoiceStateToServer();
                 } else if (data.type === 'tts-clear') {
                     this.audioPlayer.clear();
+                    this.voiceState.setTtsActive(false);
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
                 } else if (data.type === 'session-reset') {
@@ -216,121 +549,8 @@ class MessengerClient {
                 this.scrollToBottom();
             }
         }
-        // Play a chime on transition to waiting; cancel pending chime on transition away
-        if (isWaiting) {
-            this.stopHeartbeat();
-            if (!this._waitingChimePending) {
-                this._waitingChimePending = true;
-                this.playWaitingChimeWhenReady();
-            }
-        } else {
-            this._waitingChimePending = false;
-            if (this.isListening) {
-                this.startHeartbeat();
-            }
-        }
-    }
-
-    playWaitingChimeWhenReady() {
-        // Wait for any TTS audio to finish before playing the chime (max 15s).
-        // Always delay initially — the waitStatus event often arrives before
-        // TTS streaming has started, so isPlaying() would be false prematurely.
-        const deadline = Date.now() + 15000;
-        const checkDone = () => {
-            if (!this._waitingChimePending) return; // cancelled
-            if (!this.audioPlayer.isPlaying()) {
-                this._waitingChimePending = false;
-                this.playWaitingChime();
-            } else if (Date.now() >= deadline) {
-                this._waitingChimePending = false;
-                this.playWaitingChime(); // play anyway after timeout
-            } else {
-                setTimeout(checkDone, 100);
-            }
-        };
-        // Wait 500ms before first check to give TTS time to start streaming
-        setTimeout(checkDone, 500);
-    }
-
-    playWaitingChime() {
-        try {
-            const ctx = new AudioContext();
-            const now = ctx.currentTime;
-
-            // First note: 880Hz for 100ms
-            const osc1 = ctx.createOscillator();
-            const gain1 = ctx.createGain();
-            osc1.frequency.value = 880;
-            osc1.type = 'sine';
-            gain1.gain.setValueAtTime(0.3, now);
-            gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
-            osc1.connect(gain1);
-            gain1.connect(ctx.destination);
-            osc1.start(now);
-            osc1.stop(now + 0.1);
-
-            // Second note: 1100Hz for 100ms, closes context when done
-            const osc2 = ctx.createOscillator();
-            const gain2 = ctx.createGain();
-            osc2.frequency.value = 1100;
-            osc2.type = 'sine';
-            gain2.gain.setValueAtTime(0.3, now + 0.1);
-            gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
-            osc2.connect(gain2);
-            gain2.connect(ctx.destination);
-            osc2.start(now + 0.1);
-            osc2.stop(now + 0.2);
-
-            // Clean up the context after the last oscillator ends
-            osc2.onended = () => ctx.close().catch(() => {});
-        } catch (e) {
-            console.warn('Could not play waiting chime:', e);
-        }
-    }
-
-    startHeartbeat() {
-        if (this.heartbeatInterval) return; // already running
-        try {
-            if (!this.heartbeatContext) {
-                this.heartbeatContext = new AudioContext();
-            }
-            if (this.heartbeatContext.state === 'suspended') {
-                this.heartbeatContext.resume();
-            }
-            this._playHeartbeatPulse();
-            this.heartbeatInterval = setInterval(() => this._playHeartbeatPulse(), 2500);
-        } catch (e) {
-            console.warn('Could not start heartbeat:', e);
-        }
-    }
-
-    stopHeartbeat() {
-        if (this.heartbeatInterval) {
-            clearInterval(this.heartbeatInterval);
-            this.heartbeatInterval = null;
-        }
-    }
-
-    _playHeartbeatPulse() {
-        if (!this.heartbeatContext || this.heartbeatContext.state === 'closed') return;
-        try {
-            const ctx = this.heartbeatContext;
-            const now = ctx.currentTime;
-
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.frequency.value = 70;
-            osc.type = 'sine';
-            gain.gain.setValueAtTime(0, now);
-            gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(now);
-            osc.stop(now + 0.25);
-        } catch (e) {
-            // Silently ignore pulse errors
-        }
+        // Update the signal — syncState() handles the rest
+        this.voiceState.setWaitStatus(isWaiting);
     }
 
     initializeSessionSidebar() {
@@ -565,6 +785,10 @@ class MessengerClient {
     }
 
     setupEventListeners() {
+        window.addEventListener('beforeunload', () => {
+            this.voiceState.destroy();
+        });
+
         // Text input events
         this.messageInput.addEventListener('keydown', (e) => this.handleTextInputKeydown(e));
         this.messageInput.addEventListener('input', () => this.autoGrowTextarea());
@@ -850,6 +1074,11 @@ class MessengerClient {
 
             // Unlock AudioPlayer on user gesture (iOS Safari requirement)
             await this.audioPlayer.unlock();
+            // Unlock the state machine AudioContext on user gesture (Safari requirement)
+            await this.voiceState.unlock();
+            // Signal that we're now listening — syncState() will stay inactive (silent)
+            // until the first waitStatus event arrives from the server
+            this.voiceState.setListening(true);
 
             // Open WebSocket; audio capture starts from the onopen callback
             this.connectAudioWebSocket();
@@ -869,7 +1098,7 @@ class MessengerClient {
 
     async stopVoiceDictation() {
         this.isListening = false;
-        this.stopHeartbeat();
+        this.voiceState.setListening(false);
         if (this.recognition) {
             this.recognition.stop();
         }
@@ -1075,6 +1304,8 @@ class MessengerClient {
         this.audioWs.onclose = () => {
             console.log('[WS] Disconnected');
             this.wsConnected = false;
+            // TTS is no longer active if the WS drops
+            this.voiceState.setTtsActive(false);
             this.audioWs = null;
             // Reset TTS playback state and unmute mic on disconnect
             this.audioPlayer.clear();
@@ -1112,7 +1343,7 @@ class MessengerClient {
                 break;
             case 'tts-start':
                 console.log('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate);
-                this.stopHeartbeat();
+                this.voiceState.setTtsActive(true);
                 this.audioPlayer.prepareForPlayback(msg.sampleRate, msg.audioId);
                 // Echo suppression: mute mic audio streaming during TTS playback
                 this._muteAudioCapture(true);
@@ -1120,6 +1351,7 @@ class MessengerClient {
             case 'tts-end':
                 this.debugLog('[WS] TTS end:', msg.audioId);
                 this.audioPlayer.finishPlayback();
+                this.voiceState.setTtsActive(false);
                 // Send tts-ack to server
                 if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
                     this.audioWs.send(JSON.stringify({ type: 'tts-ack', audioId: msg.audioId }));
@@ -1131,6 +1363,7 @@ class MessengerClient {
             case 'tts-clear':
                 this.debugLog('[WS] TTS clear');
                 this.audioPlayer.clear();
+                this.voiceState.setTtsActive(false);
                 this._muteAudioCapture(false);
                 break;
             case 'pong':
