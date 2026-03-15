@@ -113,6 +113,7 @@ class MessengerClient {
         this.settingsContent = document.getElementById('settingsContent');
         this.speechRateSlider = document.getElementById('speechRate');
         this.speechRateInput = document.getElementById('speechRateInput');
+        this.feedbackSoundModeSelect = document.getElementById('feedbackSoundMode');
         this.testTTSBtn = document.getElementById('testTTSBtn');
 
         // Session sidebar elements
@@ -446,6 +447,16 @@ class MessengerClient {
             this.recognitionMode = savedRecognitionMode;
         }
 
+        // Load feedback sound mode
+        const VALID_FEEDBACK_MODES = ['continuous', 'once', 'off'];
+        const savedFeedbackMode = localStorage.getItem('feedbackSoundMode');
+        if (savedFeedbackMode && VALID_FEEDBACK_MODES.includes(savedFeedbackMode) && this.feedbackSoundModeSelect) {
+            this.feedbackSoundModeSelect.value = savedFeedbackMode;
+        } else if (savedFeedbackMode && !VALID_FEEDBACK_MODES.includes(savedFeedbackMode)) {
+            // Invalid stored value — clear it so default ('continuous') is used
+            localStorage.removeItem('feedbackSoundMode');
+        }
+
     }
 
     async checkServerRecognition() {
@@ -538,6 +549,14 @@ class MessengerClient {
                     localStorage.setItem('speechRate', this.speechRate.toString());
                     this.syncSelectedVoiceToServer();
                 }
+            });
+        }
+
+        // Feedback sound mode select
+        if (this.feedbackSoundModeSelect) {
+            this.feedbackSoundModeSelect.addEventListener('change', (e) => {
+                localStorage.setItem('feedbackSoundMode', e.target.value);
+                this.syncSelectedVoiceToServer();
             });
         }
 
@@ -916,7 +935,7 @@ class MessengerClient {
             await fetch(`${this.baseUrl}/api/selected-voice`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ selectedVoice: 'system', speechRate: Math.round(this.speechRate * 200) })
+                body: JSON.stringify({ selectedVoice: 'system', speechRate: Math.round(this.speechRate * 200), feedbackSoundMode: this.feedbackSoundModeSelect ? this.feedbackSoundModeSelect.value : 'continuous' })
             });
         } catch (error) {
             this.debugLog('Failed to sync selected voice to server:', error);

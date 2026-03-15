@@ -162,6 +162,7 @@ interface VoicePreferences {
   voiceActive: boolean;
   selectedVoice: string;
   speechRate: number;
+  feedbackSoundMode: 'once' | 'continuous' | 'off';
 }
 
 // Background voice enforcement: when enabled, inactive sessions must speak after tool use
@@ -206,7 +207,8 @@ export class TestServer {
     this.voicePreferences = {
       voiceActive: false,
       selectedVoice: 'browser',
-      speechRate: 200
+      speechRate: 200,
+      feedbackSoundMode: 'continuous'
     };
 
     this.setupMiddleware();
@@ -608,11 +610,15 @@ export class TestServer {
       }
 
       this.voicePreferences.selectedVoice = selectedVoice;
-      const { speechRate } = req.body;
+      const { speechRate, feedbackSoundMode } = req.body;
       if (typeof speechRate === 'number' && speechRate > 0) {
         this.voicePreferences.speechRate = Math.max(50, Math.min(500, Math.round(speechRate)));
       }
-      res.json({ success: true, selectedVoice, speechRate: this.voicePreferences.speechRate });
+      const VALID_FEEDBACK_MODES = new Set(['once', 'continuous', 'off']);
+      if (typeof feedbackSoundMode === 'string' && VALID_FEEDBACK_MODES.has(feedbackSoundMode)) {
+        this.voicePreferences.feedbackSoundMode = feedbackSoundMode as 'once' | 'continuous' | 'off';
+      }
+      res.json({ success: true, selectedVoice, speechRate: this.voicePreferences.speechRate, feedbackSoundMode: this.voicePreferences.feedbackSoundMode });
     });
 
     // POST /api/validate-action
@@ -897,7 +903,8 @@ export class TestServer {
     this.voicePreferences = {
       voiceActive: false,
       selectedVoice: 'browser',
-      speechRate: 200
+      speechRate: 200,
+      feedbackSoundMode: 'continuous'
     };
     this.activeCompositeKey = null;
     this.speakWhitelist.clear();
