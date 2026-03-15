@@ -318,7 +318,6 @@ class ServerAudioState {
   private _lastWaitStatus = false;
   private _ttsActive = false;
   private _pulseTimer: ReturnType<typeof setInterval> | null = null;
-  private _chimeDelayTimer: ReturnType<typeof setTimeout> | null = null;
 
   syncState(): void {
     let desired: typeof this.state;
@@ -363,7 +362,6 @@ class ServerAudioState {
     const oldState = this.state;
     this.state = newState;
     this._stopPulseTimer();
-    this._cancelChimeDelay();
 
     debugLog(`[ServerAudio] ${oldState} -> ${newState}`);
 
@@ -372,8 +370,7 @@ class ServerAudioState {
         break;
 
       case 'listening':
-        // Delay chime to let TTS finish draining from AudioPlayer
-        this._scheduleChimeThenPulses();
+        this._startPulseTimer('listening');
         break;
 
       case 'processing':
@@ -384,21 +381,6 @@ class ServerAudioState {
         // No sounds during TTS
         break;
     }
-  }
-
-  private _scheduleChimeThenPulses(): void {
-    // Wait 600ms for any final TTS chunks to drain, then play chime
-    this._chimeDelayTimer = setTimeout(() => {
-      this._chimeDelayTimer = null;
-      if (this.state !== 'listening') return;
-      this._streamSound('chime');
-      // Start listening pulses after chime (chime is ~200ms)
-      setTimeout(() => {
-        if (this.state === 'listening') {
-          this._startPulseTimer('listening');
-        }
-      }, 300);
-    }, 600);
   }
 
   private _startPulseTimer(type: 'listening' | 'processing'): void {
@@ -424,13 +406,6 @@ class ServerAudioState {
     }
   }
 
-  private _cancelChimeDelay(): void {
-    if (this._chimeDelayTimer !== null) {
-      clearTimeout(this._chimeDelayTimer);
-      this._chimeDelayTimer = null;
-    }
-  }
-
   private _streamSound(soundKey: keyof SoundLibrary): void {
     const filePath = sounds[soundKey];
     if (!filePath) return;
@@ -449,7 +424,6 @@ class ServerAudioState {
 
   destroy(): void {
     this._stopPulseTimer();
-    this._cancelChimeDelay();
     this.state = 'inactive';
   }
 }
