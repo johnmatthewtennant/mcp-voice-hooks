@@ -44,6 +44,7 @@ Thumbs.db
 
 # Claude settings
 .claude/settings.local.json
+.claude/worktrees/
 
 # TLS certificates
 certs/
