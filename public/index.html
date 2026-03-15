@@ -400,47 +400,38 @@
         }
 
         /* Listening Indicator */
-        /* Settings Toggle */
-        .settings-toggle {
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid #E0E0E0;
+        /* Header Settings */
+        .header-settings {
+            position: relative;
         }
 
         .toggle-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
             cursor: pointer;
-            padding: 8px;
+            padding: 6px 10px;
             border-radius: 6px;
+            font-size: 20px;
             transition: background 0.2s;
         }
 
         .toggle-header:hover {
-            background: #F8F9FA;
+            background: rgba(0, 0, 0, 0.1);
         }
 
-        .toggle-header h3 {
-            margin: 0;
-            font-size: 15px;
-            color: #666;
-        }
-
-        .toggle-arrow {
-            transition: transform 0.2s;
-        }
-
-        .toggle-arrow.open {
-            transform: rotate(180deg);
-        }
-
-        .settings-content {
+        .settings-dropdown {
             display: none;
-            padding: 12px 8px;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border: 2px solid #666;
+            border-radius: 8px;
+            padding: 16px;
+            min-width: 260px;
+            z-index: 200;
+            box-shadow: 4px 4px 0 #666;
         }
 
-        .settings-content.open {
+        .settings-dropdown.open {
             display: block;
         }
 
@@ -874,6 +865,21 @@
         <!-- Header -->
         <div class="app-header">
             <h1>Voice Mode for Claude Code</h1>
+            <div class="header-settings">
+                <div class="toggle-header" id="settingsToggleHeader">
+                    <span class="toggle-arrow">&#9881;</span>
+                </div>
+                <div class="settings-dropdown" id="settingsContent">
+                    <div class="tts-controls" id="voiceOptions">
+                        <div class="tts-control">
+                            <label for="speechRate">Speaking Rate:</label>
+                            <input type="range" id="speechRate" min="0.5" max="5" step="0.1" value="1">
+                            <input type="number" id="speechRateInput" min="0.5" max="5" step="0.1" value="1">
+                        </div>
+                        <button class="tts-test-btn" id="testTTSBtn">Test Voice</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Body with sidebar and main content -->
@@ -944,23 +950,6 @@
                     </button>
                 </div>
 
-                <!-- Settings Toggle -->
-                <div class="settings-toggle">
-                    <div class="toggle-header" id="settingsToggleHeader">
-                        <h3>Voice Settings</h3>
-                        <span class="toggle-arrow">▼</span>
-                    </div>
-                    <div class="settings-content" id="settingsContent">
-                        <div class="tts-controls" id="voiceOptions">
-                            <div class="tts-control">
-                                <label for="speechRate">Speaking Rate:</label>
-                                <input type="range" id="speechRate" min="0.5" max="5" step="0.1" value="1">
-                                <input type="number" id="speechRateInput" min="0.5" max="5" step="0.1" value="1">
-                            </div>
-                            <button class="tts-test-btn" id="testTTSBtn">Test Voice</button>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
 

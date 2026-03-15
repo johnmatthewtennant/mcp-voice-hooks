@@ -511,15 +511,15 @@ class MessengerClient {
             });
         }
 
-        // Settings toggle
-        this.settingsToggleHeader.addEventListener('click', () => {
-            const arrow = this.settingsToggleHeader.querySelector('.toggle-arrow');
-            if (this.settingsContent.classList.contains('open')) {
+        // Settings toggle (dropdown)
+        this.settingsToggleHeader.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.settingsContent.classList.toggle('open');
+        });
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!this.settingsContent.contains(e.target) && !this.settingsToggleHeader.contains(e.target)) {
                 this.settingsContent.classList.remove('open');
-                arrow.classList.remove('open');
-            } else {
-                this.settingsContent.classList.add('open');
-                arrow.classList.add('open');
             }
         });
 
