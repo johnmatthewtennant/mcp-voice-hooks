@@ -34,6 +34,9 @@ class AudioPlayer {
         // should play after the currently scheduled audio finishes
         if (this.playbackContext && this.nextStartTime < this.playbackContext.currentTime) {
             this.nextStartTime = this.playbackContext.currentTime;
+        } else if (this.playbackContext) {
+            // Add a short pause between consecutive utterances for natural rhythm
+            this.nextStartTime += 0.25;
         }
     }
 
@@ -479,7 +482,8 @@ class MessengerClient {
         audio.addEventListener('ended', () => {
             this.audioPlaying = false;
             this.currentAudio = null;
-            this.processAudioQueue();
+            // Short pause between consecutive utterances for natural rhythm
+            setTimeout(() => this.processAudioQueue(), 250);
         });
 
         audio.addEventListener('error', (e) => {
