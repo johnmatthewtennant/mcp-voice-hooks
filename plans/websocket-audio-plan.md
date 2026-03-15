@@ -77,6 +77,7 @@ All messages are JSON text frames except raw audio, which uses binary frames.
 | `vad-speech-start` | `{ "type": "vad-speech-start" }` | VAD detected speech onset |
 | `vad-speech-end` | `{ "type": "vad-speech-end" }` | VAD detected speech offset (end of utterance) |
 | `tts-ack` | `{ "type": "tts-ack", "audioId": "<id>" }` | Client finished playing a TTS audio segment |
+| `ping` | `{ "type": "ping" }` | Keepalive heartbeat (sent every 30s) |
 
 #### Server → Client
 
@@ -84,13 +85,14 @@ All messages are JSON text frames except raw audio, which uses binary frames.
 |------|--------|-------------|
 | `transcript-interim` | `{ "type": "transcript-interim", "text": "...", "utteranceId": "<id>" }` | Partial/volatile transcription result for UI display |
 | `transcript-final` | `{ "type": "transcript-final", "text": "...", "utteranceId": "<id>" }` | Finalized transcription — triggers utterance creation |
-| `tts-audio` | Binary frame prefixed with 4-byte audioId length + audioId string, then PCM16 data | TTS audio chunk for playback |
+| TTS audio | Binary frame (raw PCM16 LE data) | TTS audio chunk for playback (always preceded by `tts-start` JSON message) |
 | `tts-start` | `{ "type": "tts-start", "audioId": "<id>", "sampleRate": 22050, "channels": 1 }` | TTS audio stream starting |
 | `tts-end` | `{ "type": "tts-end", "audioId": "<id>" }` | TTS audio stream complete |
 | `tts-clear` | `{ "type": "tts-clear" }` | Clear TTS playback queue |
 | `session-reset` | `{ "type": "session-reset" }` | New Claude session detected |
 | `wait-status` | `{ "type": "wait-status", "isWaiting": true, "sessionKey": "..." }` | Claude waiting indicator |
 | `error` | `{ "type": "error", "message": "..." }` | Error from server |
+| `pong` | `{ "type": "pong" }` | Keepalive response |
 
 ### Audio Format Rationale
 
@@ -251,24 +253,39 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.buffer = new Float32Array(0);
-    this.frameSize = 320; // 20ms at 16kHz (will be downsampled)
+    // sampleRate is the actual AudioContext rate (e.g., 48000 on iOS, not 16000)
+    // Target: 20ms frames at 16kHz = 320 samples output
+    this.targetRate = 16000;
+    this.ratio = sampleRate / this.targetRate; // e.g., 48000/16000 = 3
+    this.inputFrameSize = Math.round(320 * this.ratio); // samples to accumulate before downsampling
+  }
+
+  downsample(buffer, ratio) {
+    // Simple linear interpolation downsampling
+    const outputLength = Math.floor(buffer.length / ratio);
+    const output = new Float32Array(outputLength);
+    for (let i = 0; i < outputLength; i++) {
+      output[i] = buffer[Math.round(i * ratio)];
+    }
+    return output;
   }
 
   process(inputs) {
     const input = inputs[0][0]; // mono channel
     if (!input) return true;
 
-    // Accumulate samples
+    // Accumulate samples at native rate
     const newBuffer = new Float32Array(this.buffer.length + input.length);
     newBuffer.set(this.buffer);
     newBuffer.set(input, this.buffer.length);
     this.buffer = newBuffer;
 
-    // Send 20ms frames
-    while (this.buffer.length >= this.frameSize) {
-      const frame = this.buffer.slice(0, this.frameSize);
-      this.port.postMessage({ type: 'audio-frame', frame });
-      this.buffer = this.buffer.slice(this.frameSize);
+    // Send 20ms frames, downsampled to 16kHz
+    while (this.buffer.length >= this.inputFrameSize) {
+      const chunk = this.buffer.slice(0, this.inputFrameSize);
+      const downsampled = this.ratio === 1 ? chunk : this.downsample(chunk, this.ratio);
+      this.port.postMessage({ type: 'audio-frame', frame: downsampled });
+      this.buffer = this.buffer.slice(this.inputFrameSize);
     }
 
     return true;
@@ -286,8 +303,8 @@ async startAudioCapture() {
     audio: { channelCount: 1, echoCancellation: true, autoGainControl: true, noiseSuppression: true }
   });
 
-  // Create AudioContext at 16kHz for speech recognition
-  this.audioContext = new AudioContext({ sampleRate: 16000 });
+  // Create AudioContext at native rate — worklet handles downsampling to 16kHz
+  this.audioContext = new AudioContext();
   await this.audioContext.resume(); // User gesture required on iOS
 
   const source = this.audioContext.createMediaStreamSource(stream);
@@ -629,33 +646,53 @@ If Silero VAD adds too much bundle size or complexity:
 
 ### Risks
 
-1. **swift-transcribe modification scope**: Adding stdin input mode requires non-trivial Swift changes. The `SpeechAnalyzer` framework may have expectations about audio timing/format that make stdin piping tricky. Mitigation: Test early with a simple stdin prototype.
+1. **swift-transcribe modification scope**: Adding stdin input mode requires non-trivial Swift changes. The `SpeechAnalyzer` framework may have expectations about audio timing/format that make stdin piping tricky. `TimestampedBuffer` requires `AVAudioPCMBuffer` construction with correct `AVAudioFormat` and `frameLength`. Timestamps should be computed from sample count (not wall clock) since network latency would skew `mach_continuous_time()`. Mitigation: Test early with a simple stdin prototype.
 
-2. **iOS Safari AudioWorklet reliability**: Some users report AudioWorklet issues on specific iOS versions (notably iOS 18). Mitigation: Include ScriptProcessorNode fallback; test on multiple iOS versions.
+2. **macOS 26.0 requirement**: swift-transcribe uses `@available(macOS 26.0, *)` — the `SpeechTranscriber` and `SpeechAnalyzer` APIs are macOS 26+ only. Anyone on macOS 15 (Sequoia) or earlier cannot use server-side recognition. Mitigation: Maintain Web Speech API fallback; consider Whisper API as alternative backend for older macOS versions.
 
-3. **AudioContext sample rate mismatch**: Creating an AudioContext with `sampleRate: 16000` may not be honored on all platforms. iOS Safari may force 48kHz. Mitigation: Capture at native sample rate and downsample in the AudioWorklet before sending.
+3. **iOS Safari AudioWorklet reliability**: Some users report AudioWorklet issues on specific iOS versions (notably iOS 16-18) where AudioWorklet nodes can silently stop processing. Mitigation: Include ScriptProcessorNode fallback; test on multiple iOS versions.
 
-4. **swift-transcribe process management**: Spawning a process per WS connection could be resource-intensive with multiple concurrent sessions. Mitigation: Limit to one recognizer at a time (only active session); pool management.
+4. **AudioContext sample rate mismatch**: iOS Safari ignores the requested `sampleRate` and uses the hardware rate (typically 48kHz). **This is not a risk to mitigate — it is the expected behavior.** The AudioWorklet MUST capture at native rate and downsample to 16kHz before sending. The worklet's `frameSize` must be calculated based on the actual AudioContext sample rate, not a hardcoded 16kHz assumption. See "Resolved Decisions" below.
 
-5. **Echo cancellation**: If the browser plays TTS audio while the mic is active, the speech recognizer may transcribe the TTS output. Mitigation: Mute mic audio streaming during TTS playback, or rely on browser's echoCancellation constraint.
+5. **swift-transcribe process management**: Spawning a process per WS connection could be resource-intensive. `SpeechAnalyzer` loads a neural model (1-3s startup). Mitigation: Keep process running across utterances; limit to one recognizer at a time (only active session). Consider a singleton process that multiplexes audio.
 
-6. **Latency budget**: Voice-to-transcript latency depends on swift-transcribe's processing speed (~190x real-time is fast, but startup time matters). Mitigation: Keep the process running; don't restart per utterance.
+6. **Echo cancellation**: Browser's `echoCancellation` constraint is designed for WebRTC (canceling far-end audio), NOT for same-device playback. It will not reliably handle the browser playing TTS audio through speakers while capturing mic. **Muting mic audio streaming during TTS playback MUST be the default behavior, not optional.** See "Resolved Decisions" below.
 
-7. **macOS-only limitation**: swift-transcribe only runs on macOS with Apple Silicon. This limits server-side speech recognition to Mac hosts. Mitigation: Maintain Web Speech API fallback; consider adding Whisper API integration as alternative backend.
+7. **Latency budget**: Voice-to-transcript latency depends on swift-transcribe's processing speed (~190x real-time is fast, but startup time matters). Mitigation: Keep the process running; don't restart per utterance.
+
+8. **`say` command does not support stdout streaming**: `say -o -` and `say -o /dev/stdout` do not work — they produce 0 or 32 bytes instead of full audio. The file-based approach (render WAV, strip header, stream PCM) is the only reliable path. Can be replaced later with a streaming TTS provider (ElevenLabs, OpenAI).
+
+9. **No backpressure mechanism**: If swift-transcribe falls behind, binary audio frames accumulate. The stdin pipe has a kernel buffer (~64KB on macOS). If the pipe fills, `process.stdin.write()` returns false and Node.js buffers in memory. Mitigation: Monitor `write()` return value; drop frames if buffer exceeds threshold.
+
+10. **Security**: The WebSocket endpoint has no authentication. Low risk on localhost, but HTTPS remote access (already a feature) would allow any LAN device to connect. Mitigation: Add a simple token/cookie check for remote connections.
+
+11. **Trigger word mode**: With server-side recognition, the server produces `transcript-final` events that would need to be buffered until the trigger word is detected. This requires either: (a) moving trigger word logic to the server, or (b) having the client intercept `transcript-final` messages and hold them. **Design this before starting Phase 2** as it affects the transcript event flow architecture.
+
+### Resolved Decisions (from Codex review)
+
+1. **AudioWorklet sample rate**: Always capture at native AudioContext rate and downsample in the worklet. Do NOT create AudioContext with `sampleRate: 16000`. The worklet must detect the actual sample rate and adjust frame size accordingly.
+
+2. **Echo suppression**: Mute mic audio streaming during TTS playback by default. Do not rely on browser echo cancellation.
+
+3. **TTS binary frame format**: Use separate text JSON messages for `tts-start`/`tts-end` and plain binary frames for audio data (no audioId prefix in binary frames). Simpler than the mixed prefix approach and avoids client parsing mismatch.
+
+4. **Phase order**: Consider doing Phase 3 (TTS streaming) before Phase 2 (speech recognition) — TTS streaming is simpler and directly solves the iOS autoplay issue, which is the more urgent problem.
+
+5. **`say` stdout streaming**: Not viable. Use file-based rendering. Can swap to streaming TTS provider later.
+
+6. **WebSocket keepalive**: Add ping/pong heartbeat to the protocol for mobile connection reliability.
 
 ### Open Questions
 
-1. **Should we support two separate AudioContexts** (one at 16kHz for capture, one at 22050Hz for playback) or use a single context? Two contexts is cleaner but may have iOS Safari quirks.
+1. **Should we support two separate AudioContexts** (one at native rate for capture, one at 22050Hz for playback) or use a single context? Two contexts is cleaner but iOS Safari has a limit (4-6 contexts). Two should be safe.
 
 2. **Should VAD control audio streaming** (only send during speech) or should we stream continuously and use VAD events as metadata? Continuous is simpler but uses more bandwidth; gated streaming saves bandwidth but risks clipping.
 
-3. **How should swift-transcribe handle the audio format conversion?** Should Node.js downsample from 48kHz to 16kHz before piping, or should swift-transcribe accept any sample rate? Letting the server downsample is simpler; letting swift-transcribe handle it leverages AVAudioConverter.
+3. **How should swift-transcribe handle the audio format conversion?** The `makeAnalyzerInputStream` function already handles conversion via `AVAudioConverter`. Verify that `SpeechAnalyzer.bestAvailableAudioFormat()` is compatible with 16kHz PCM16 mono input, or let swift-transcribe handle the conversion internally.
 
-4. **Should the `say` command output be streamed in real-time** (`say -o -`) or should we continue rendering to a file and then streaming? Real-time streaming reduces latency but adds complexity.
+4. **Should we use a single WebSocket for all purposes** (audio + control + session management) or have separate connections? Single is simpler for the client; separate allows independent lifecycle management.
 
-5. **What happens with the trigger word mode?** Currently, the browser accumulates text and sends on trigger word. With server-side recognition, the server would need to buffer transcripts and send them as a batch. This needs design thought.
-
-6. **Should we use a single WebSocket for all purposes** (audio + control + session management) or have separate connections? Single is simpler for the client; separate allows independent lifecycle management.
+5. **VAD CORS requirements**: `@ricky0123/vad-web` uses ONNX Runtime WASM which requires `SharedArrayBuffer`, which in turn requires `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers. This may conflict with the SSE endpoint. Test early in Phase 4.
 
 ---
 
