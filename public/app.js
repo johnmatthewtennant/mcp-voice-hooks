@@ -224,7 +224,9 @@ class MessengerClient {
     }
 
     playWaitingChimeWhenReady() {
-        // Wait for any TTS audio to finish before playing the chime (max 15s)
+        // Wait for any TTS audio to finish before playing the chime (max 15s).
+        // Always delay initially — the waitStatus event often arrives before
+        // TTS streaming has started, so isPlaying() would be false prematurely.
         const deadline = Date.now() + 15000;
         const checkDone = () => {
             if (!this._waitingChimePending) return; // cancelled
@@ -238,12 +240,8 @@ class MessengerClient {
                 setTimeout(checkDone, 100);
             }
         };
-        if (this.audioPlayer.isPlaying()) {
-            setTimeout(checkDone, 100);
-        } else {
-            this._waitingChimePending = false;
-            this.playWaitingChime();
-        }
+        // Wait 500ms before first check to give TTS time to start streaming
+        setTimeout(checkDone, 500);
     }
 
     playWaitingChime() {
