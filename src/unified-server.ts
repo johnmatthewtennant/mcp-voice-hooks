@@ -844,9 +844,9 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   const { key, session } = parseHookRequest(req);
   registerIfFirst(key);
 
-  // Inactive session: enforce "must speak after tool use" when background enforcement is on OR voice responses are enabled
+  // Inactive session (subagent): enforce "must speak after tool use" only when background enforcement is explicitly enabled
   if (!isActiveKey(key)) {
-    const enforceSpeak = backgroundVoiceEnforcement || voicePreferences.voiceResponsesEnabled;
+    const enforceSpeak = backgroundVoiceEnforcement;
     if (enforceSpeak && session.lastToolUseTimestamp &&
       (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
       res.json({

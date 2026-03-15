@@ -131,7 +131,11 @@ class MessengerClient {
             try {
                 const data = JSON.parse(event.data);
 
-                if (data.type === 'speak' && data.text) {
+                if (data.type === 'connected') {
+                    // Connected (or reconnected) to server — sync voice state
+                    // This handles both initial connect and reconnect after server restart
+                    this.syncVoiceStateToServer();
+                } else if (data.type === 'speak' && data.text) {
                     // If system voice is selected, don't do browser TTS — audio will arrive via tts-audio event
                     if (this.selectedVoice !== 'system') {
                         this.speakText(data.text);

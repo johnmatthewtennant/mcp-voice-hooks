@@ -743,7 +743,7 @@ export class TestServer {
 
       // Inactive session: enforce "must speak after tool use" when enforcement is on OR voice responses enabled
       if (!this.isActiveKey(key)) {
-        const enforceSpeak = this.backgroundVoiceEnforcement || this.voicePreferences.voiceResponsesEnabled;
+        const enforceSpeak = this.backgroundVoiceEnforcement;
         if (enforceSpeak && session.lastToolUseTimestamp &&
           (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
           res.json({

@@ -138,7 +138,7 @@ describe('Per-session state and session lifecycle', () => {
   });
 
   describe('Inactive session voice enforcement', () => {
-    it('inactive session stop blocks when unspoken after tool use', async () => {
+    it('inactive session stop blocks when unspoken after tool use with background enforcement', async () => {
       // Set main agent as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
@@ -146,8 +146,8 @@ describe('Per-session state and session lifecycle', () => {
         body: JSON.stringify({ session_id: 'session-A' }),
       });
 
-      // Enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      // Enable background voice enforcement (explicit opt-in for subagent speaking)
+      await fetch(`${server.url}/api/background-voice-enforcement`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: true }),
@@ -179,8 +179,8 @@ describe('Per-session state and session lifecycle', () => {
         body: JSON.stringify({ session_id: 'session-A' }),
       });
 
-      // Enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      // Enable background voice enforcement
+      await fetch(`${server.url}/api/background-voice-enforcement`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: true }),
