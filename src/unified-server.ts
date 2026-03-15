@@ -8,9 +8,8 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { exec, execFile, type ChildProcess } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { promisify } from 'util';
 import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -30,12 +29,8 @@ const WAIT_TIMEOUT_SECONDS = 300; // 5-minute safety net; primary exit is browse
 const HTTP_PORT = process.env.MCP_VOICE_HOOKS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_PORT) : 5111;
 const HTTPS_PORT = process.env.MCP_VOICE_HOOKS_HTTPS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_HTTPS_PORT) : HTTP_PORT + 1;
 
-// Promisified exec for async/await
-const execAsync = promisify(exec);
-
 // Server-wide event emitter for cross-component signals
 const serverEvents = new EventEmitter();
-
 
 // TTS audio queue - serializes say -o renders to prevent CPU overload
 interface TtsQueueItem {
@@ -207,8 +202,7 @@ const SPEECH_RECOGNIZER_AVAILABLE = !NO_TRANSCRIBE && SpeechRecognizer.binaryExi
 
 // Voice preferences (controlled by browser)
 let voicePreferences = {
-  voiceResponsesEnabled: false,
-  voiceInputActive: false,
+  voiceActive: false,
   selectedVoice: 'browser' as string,  // 'system' or 'browser:N'
   speechRate: 200 as number  // words per minute for say -o rendering
 };
@@ -235,7 +229,7 @@ function renderTtsToFile(text: string, rate: number): Promise<{ filePath: string
 }
 
 // Background voice enforcement: when enabled, inactive sessions get
-// voiceResponsesEnabled=true and voiceInputActive=false in hook responses,
+// voiceActive=true in hook responses for inactive sessions,
 // forcing them to call the speak tool (which stores text in conversation history).
 let backgroundVoiceEnforcement = false;
 
@@ -450,7 +444,7 @@ app.get('/api/utterances/status', (_req: Request, res: Response) => {
 // Shared dequeue logic
 function dequeueUtterancesCore(session?: SessionState) {
   const s = session || getActiveSessionOrFirst();
-  // Always dequeue pending utterances regardless of voiceInputActive
+  // Always dequeue pending utterances regardless of voiceActive
   // This allows both typed and spoken messages to be dequeued
   const pendingUtterances = s.queue.utterances
     .filter(u => u.status === 'pending')
@@ -481,7 +475,7 @@ async function waitForUtteranceCore(session?: SessionState) {
   const s = session || getActiveSessionOrFirst();
 
   // Check if voice input is active
-  if (!voicePreferences.voiceInputActive) {
+  if (!voicePreferences.voiceActive) {
     return {
       success: false,
       error: 'Voice input is not active. Cannot wait for utterances when voice input is disabled.'
@@ -497,12 +491,10 @@ async function waitForUtteranceCore(session?: SessionState) {
   // Notify frontend that wait has started
   notifyWaitStatus(true);
 
-  let firstTime = true;
-
   // Poll for utterances
   while (Date.now() - startTime < maxWaitMs) {
     // Check if voice input is still active
-    if (!voicePreferences.voiceInputActive) {
+    if (!voicePreferences.voiceActive) {
       debugLog('[WaitCore] Voice input deactivated during wait_for_utterance');
       notifyWaitStatus(false); // Notify wait has ended
       return {
@@ -541,11 +533,6 @@ async function waitForUtteranceCore(session?: SessionState) {
         count: pendingUtterances.length,
         waitTime: Date.now() - startTime,
       };
-    }
-
-    if (firstTime) {
-      firstTime = false;
-      // Chime is now played in the browser via waitStatus SSE event
     }
 
     // Wait 100ms before checking again, but wake immediately on client disconnect
@@ -601,7 +588,7 @@ app.get('/api/has-pending-utterances', (_req: Request, res: Response) => {
 // Unified action validation endpoint
 app.post('/api/validate-action', (req: Request, res: Response) => {
   const { action } = req.body;
-  const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
+  const voiceActive = voicePreferences.voiceActive;
   const session = getActiveSessionOrFirst();
 
   if (!action || !['tool-use', 'stop'].includes(action)) {
@@ -610,7 +597,7 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
   }
 
   // Only check for pending utterances if voice input is active
-  if (voicePreferences.voiceInputActive) {
+  if (voicePreferences.voiceActive) {
     const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
     if (pendingUtterances.length > 0) {
       res.json({
@@ -623,7 +610,7 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
   }
 
   // Check for delivered but unresponded utterances (when voice enabled)
-  if (voiceResponsesEnabled) {
+  if (voiceActive) {
     const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
     if (deliveredUtterances.length > 0) {
       res.json({
@@ -636,7 +623,7 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
   }
 
   // For stop action, check if we should wait (only if voice input is active)
-  if (action === 'stop' && voicePreferences.voiceInputActive) {
+  if (action === 'stop' && voicePreferences.voiceActive) {
     if (session.queue.utterances.length > 0) {
       res.json({
         allowed: false,
@@ -656,15 +643,14 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 // Unified hook handler
 function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool', session?: SessionState): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
   const s = session || getActiveSessionOrFirst();
-  const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
-  const voiceInputActive = voicePreferences.voiceInputActive;
+  const voiceActive = voicePreferences.voiceActive;
 
   // 1. Check for pending utterances and auto-dequeue
-  // Always check for pending utterances regardless of voiceInputActive
+  // Always check for pending utterances regardless of voiceActive
   // This allows typed messages to be dequeued even when mic is off
   const pendingUtterances = s.queue.utterances.filter(u => u.status === 'pending');
   if (pendingUtterances.length > 0) {
-    // Always dequeue (dequeueUtterancesCore no longer requires voiceInputActive)
+    // Always dequeue (dequeueUtterancesCore no longer requires voiceActive)
     const dequeueResult = dequeueUtterancesCore(s);
 
     if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
@@ -679,7 +665,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   }
 
   // 2. Check for delivered utterances (when voice enabled)
-  if (voiceResponsesEnabled) {
+  if (voiceActive) {
     const deliveredUtterances = s.queue.utterances.filter(u => u.status === 'delivered');
     if (deliveredUtterances.length > 0) {
       // Only allow speak to proceed
@@ -707,7 +693,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   // 5. Handle stop
   if (attemptedAction === 'stop') {
     // Check if must speak after tool use
-    if (voiceResponsesEnabled && s.lastToolUseTimestamp &&
+    if (voiceActive && s.lastToolUseTimestamp &&
       (!s.lastSpeakTimestamp || s.lastSpeakTimestamp < s.lastToolUseTimestamp)) {
       return {
         decision: 'block',
@@ -715,8 +701,8 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
       };
     }
 
-    // Auto-wait for utterances (only if voice input is active)
-    if (voiceInputActive) {
+    // Auto-wait for utterances (only if voice is active)
+    if (voiceActive) {
       return (async () => {
         try {
           debugLog(`[Stop Hook] Auto-calling wait_for_utterance...`);
@@ -801,8 +787,7 @@ function registerIfFirst(key: string): void {
       const oldKey = activeCompositeKey;
       activeCompositeKey = key;
       debugLog(`[Session] New Claude session detected: ${oldKey} → ${key}`);
-      voicePreferences.voiceResponsesEnabled = false;
-      voicePreferences.voiceInputActive = false;
+      voicePreferences.voiceActive = false;
       debugLog(`[Session] Voice state reset for new session`);
       notifySessionReset();
     }
@@ -970,10 +955,9 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
     // If no clients remain (SSE or WS), disable voice features
     if (ttsClients.size === 0 && wsAudioClients.size === 0) {
       debugLog(`[SSE] Client disconnected: session=${disconnectedSessionKey || 'active'} (last client, disabling voice)`);
-      if (voicePreferences.voiceInputActive || voicePreferences.voiceResponsesEnabled) {
-        debugLog(`[SSE] Voice features disabled - Input: ${voicePreferences.voiceInputActive} -> false, Responses: ${voicePreferences.voiceResponsesEnabled} -> false`);
-        voicePreferences.voiceInputActive = false;
-        voicePreferences.voiceResponsesEnabled = false;
+      if (voicePreferences.voiceActive) {
+        debugLog(`[SSE] Voice features disabled - voiceActive: ${voicePreferences.voiceActive} -> false`);
+        voicePreferences.voiceActive = false;
       }
       serverEvents.emit('allClientsDisconnected');
     } else {
@@ -1132,9 +1116,8 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
     // If no clients remain (SSE or WS), disable voice features
     if (ttsClients.size === 0 && wsAudioClients.size === 0) {
       debugLog(`[WS] Last client disconnected, disabling voice features`);
-      if (voicePreferences.voiceInputActive || voicePreferences.voiceResponsesEnabled) {
-        voicePreferences.voiceInputActive = false;
-        voicePreferences.voiceResponsesEnabled = false;
+      if (voicePreferences.voiceActive) {
+        voicePreferences.voiceActive = false;
       }
       serverEvents.emit('allClientsDisconnected');
     }
@@ -1320,33 +1303,22 @@ function formatVoiceUtterances(utterances: any[]): string {
   return `Assistant received voice input from the user (${utterances.length} utterance${utterances.length !== 1 ? 's' : ''}):\n\n${utteranceTexts}${getVoiceResponseReminder()}`;
 }
 
-// API for voice preferences
-app.post('/api/voice-preferences', (req: Request, res: Response) => {
-  const { voiceResponsesEnabled } = req.body;
-
-  // Update preferences
-  voicePreferences.voiceResponsesEnabled = !!voiceResponsesEnabled;
-
-  debugLog(`[Preferences] Updated: voiceResponses=${voicePreferences.voiceResponsesEnabled}`);
-
-  res.json({
-    success: true,
-    preferences: voicePreferences
-  });
-});
-
-// API for voice input state
-app.post('/api/voice-input-state', (req: Request, res: Response) => {
+// API for voice active state
+app.post('/api/voice-active', (req: Request, res: Response) => {
   const { active } = req.body;
 
-  // Update voice input state
-  voicePreferences.voiceInputActive = !!active;
+  if (typeof active !== 'boolean') {
+    res.status(400).json({ error: 'active must be a boolean' });
+    return;
+  }
 
-  debugLog(`[Voice Input] ${voicePreferences.voiceInputActive ? 'Started' : 'Stopped'} listening`);
+  voicePreferences.voiceActive = active;
+
+  debugLog(`[Voice] ${voicePreferences.voiceActive ? 'Activated' : 'Deactivated'}`);
 
   res.json({
     success: true,
-    voiceInputActive: voicePreferences.voiceInputActive
+    voiceActive: voicePreferences.voiceActive
   });
 });
 
@@ -1415,7 +1387,7 @@ app.post('/api/speak', async (req: Request, res: Response) => {
   }
 
   // Check if voice responses are enabled
-  if (!voicePreferences.voiceResponsesEnabled) {
+  if (!voicePreferences.voiceActive) {
     debugLog(`[Speak] Voice responses disabled, returning error`);
     res.status(400).json({
       error: 'Voice responses are disabled',
@@ -1662,8 +1634,8 @@ function startHttpsServer() {
 
 // Helper function to get voice response reminder
 function getVoiceResponseReminder(): string {
-  const voiceResponsesEnabled = voicePreferences.voiceResponsesEnabled;
-  return voiceResponsesEnabled
+  const voiceActive = voicePreferences.voiceActive;
+  return voiceActive
     ? '\n\nThe user has enabled voice responses, so use the \'speak\' tool to respond to the user\'s voice input before proceeding.'
     : '';
 }

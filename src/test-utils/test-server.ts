@@ -159,8 +159,7 @@ function clearTtsQueue() {
 
 // Voice preferences type
 interface VoicePreferences {
-  voiceResponsesEnabled: boolean;
-  voiceInputActive: boolean;
+  voiceActive: boolean;
   selectedVoice: string;
   speechRate: number;
 }
@@ -205,8 +204,7 @@ export class TestServer {
   constructor() {
     this.app = express();
     this.voicePreferences = {
-      voiceResponsesEnabled: false,
-      voiceInputActive: false,
+      voiceActive: false,
       selectedVoice: 'browser',
       speechRate: 200
     };
@@ -288,8 +286,7 @@ export class TestServer {
       } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
         // Different session_id means new Claude instance — always switch active
         this.activeCompositeKey = key;
-        this.voicePreferences.voiceResponsesEnabled = false;
-        this.voicePreferences.voiceInputActive = false;
+        this.voicePreferences.voiceActive = false;
       }
     }
   }
@@ -404,7 +401,7 @@ export class TestServer {
 
     // POST /api/wait-for-utterances (simplified for testing - doesn't actually wait)
     this.app.post('/api/wait-for-utterances', (_req, res) => {
-      if (!this.voicePreferences.voiceInputActive) {
+      if (!this.voicePreferences.voiceActive) {
         res.status(400).json({
           success: false,
           error: 'Voice input is not active. Cannot wait for utterances when voice input is disabled.'
@@ -448,7 +445,7 @@ export class TestServer {
 
     // POST /api/dequeue-utterances
     this.app.post('/api/dequeue-utterances', (_req, res) => {
-      if (!this.voicePreferences.voiceInputActive) {
+      if (!this.voicePreferences.voiceActive) {
         res.status(400).json({
           success: false,
           error: 'Voice input is not active. Cannot dequeue utterances when voice input is disabled.'
@@ -483,7 +480,7 @@ export class TestServer {
         return;
       }
 
-      if (!this.voicePreferences.voiceResponsesEnabled) {
+      if (!this.voicePreferences.voiceActive) {
         res.status(400).json({
           error: 'Voice responses are disabled',
           message: 'Cannot speak when voice responses are disabled'
@@ -540,8 +537,8 @@ export class TestServer {
       }
     });
 
-    // POST /api/voice-input
-    this.app.post('/api/voice-input', (req, res) => {
+    // POST /api/voice-active
+    this.app.post('/api/voice-active', (req, res) => {
       const { active } = req.body;
 
       if (typeof active !== 'boolean') {
@@ -549,20 +546,7 @@ export class TestServer {
         return;
       }
 
-      this.voicePreferences.voiceInputActive = active;
-      res.json({ success: true });
-    });
-
-    // POST /api/voice-responses
-    this.app.post('/api/voice-responses', (req, res) => {
-      const { enabled } = req.body;
-
-      if (typeof enabled !== 'boolean') {
-        res.status(400).json({ error: 'enabled must be a boolean' });
-        return;
-      }
-
-      this.voicePreferences.voiceResponsesEnabled = enabled;
+      this.voicePreferences.voiceActive = active;
       res.json({ success: true });
     });
 
@@ -643,7 +627,7 @@ export class TestServer {
       const session = this.getActiveSessionOrFirst();
 
       // Check for pending utterances (only if voice input is active)
-      if (this.voicePreferences.voiceInputActive) {
+      if (this.voicePreferences.voiceActive) {
         const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
         if (pendingUtterances.length > 0) {
           res.json({
@@ -656,7 +640,7 @@ export class TestServer {
       }
 
       // Check for delivered but unresponded utterances (when voice enabled)
-      if (this.voicePreferences.voiceResponsesEnabled) {
+      if (this.voicePreferences.voiceActive) {
         const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
         if (deliveredUtterances.length > 0) {
           res.json({
@@ -669,7 +653,7 @@ export class TestServer {
       }
 
       // For stop action, check if we should wait (only if voice input is active)
-      if (action === 'stop' && this.voicePreferences.voiceInputActive) {
+      if (action === 'stop' && this.voicePreferences.voiceActive) {
         if (session.queue.utterances.length > 0) {
           res.json({
             allowed: false,
@@ -767,7 +751,7 @@ export class TestServer {
       }
 
       // Check for unresponded utterances (when voice responses enabled)
-      if (this.voicePreferences.voiceResponsesEnabled) {
+      if (this.voicePreferences.voiceActive) {
         const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
         if (deliveredUtterances.length > 0) {
           res.json({
@@ -911,8 +895,7 @@ export class TestServer {
   reset(): void {
     this.sessions.clear();
     this.voicePreferences = {
-      voiceResponsesEnabled: false,
-      voiceInputActive: false,
+      voiceActive: false,
       selectedVoice: 'browser',
       speechRate: 200
     };

@@ -76,10 +76,10 @@ describe('Session routing bug fixes', () => {
   describe('Bug 2: Conversation history should not mix between sessions', () => {
     it('main agent and subagent have completely separate conversation histories', async () => {
       // Enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true }),
+        body: JSON.stringify({ active: true }),
       });
 
       // Register main agent as active
@@ -149,10 +149,10 @@ describe('Session routing bug fixes', () => {
 
     it('speak endpoint routes to correct session via whitelist', async () => {
       // Enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true }),
+        body: JSON.stringify({ active: true }),
       });
 
       // Register main agent as active

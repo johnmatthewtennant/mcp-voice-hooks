@@ -7,10 +7,10 @@ describe('Pre-speak whitelist and multi-session routing', () => {
     server = new TestServer();
     await server.start();
     // Enable voice responses for speak tests
-    await fetch(`${server.url}/api/voice-responses`, {
+    await fetch(`${server.url}/api/voice-active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
+      body: JSON.stringify({ active: true }),
     });
   });
 

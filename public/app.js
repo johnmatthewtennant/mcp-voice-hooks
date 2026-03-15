@@ -212,24 +212,36 @@ class MessengerClient {
                 this.scrollToBottom();
             }
         }
-        // Play a chime when Claude starts waiting for input
+        // Play a chime on transition to waiting; cancel pending chime on transition away
         if (isWaiting) {
-            this.playWaitingChimeWhenReady();
+            if (!this._waitingChimePending) {
+                this._waitingChimePending = true;
+                this.playWaitingChimeWhenReady();
+            }
+        } else {
+            this._waitingChimePending = false;
         }
     }
 
     playWaitingChimeWhenReady() {
-        // Wait for any TTS audio to finish before playing the chime
+        // Wait for any TTS audio to finish before playing the chime (max 15s)
+        const deadline = Date.now() + 15000;
+        const checkDone = () => {
+            if (!this._waitingChimePending) return; // cancelled
+            if (!this.audioPlayer.isPlaying()) {
+                this._waitingChimePending = false;
+                this.playWaitingChime();
+            } else if (Date.now() >= deadline) {
+                this._waitingChimePending = false;
+                this.playWaitingChime(); // play anyway after timeout
+            } else {
+                setTimeout(checkDone, 100);
+            }
+        };
         if (this.audioPlayer.isPlaying()) {
-            const checkDone = () => {
-                if (!this.audioPlayer.isPlaying()) {
-                    this.playWaitingChime();
-                } else {
-                    setTimeout(checkDone, 100);
-                }
-            };
             setTimeout(checkDone, 100);
         } else {
+            this._waitingChimePending = false;
             this.playWaitingChime();
         }
     }
@@ -251,7 +263,7 @@ class MessengerClient {
             osc1.start(now);
             osc1.stop(now + 0.1);
 
-            // Second note: 1100Hz for 100ms
+            // Second note: 1100Hz for 100ms, closes context when done
             const osc2 = ctx.createOscillator();
             const gain2 = ctx.createGain();
             osc2.frequency.value = 1100;
@@ -263,8 +275,8 @@ class MessengerClient {
             osc2.start(now + 0.1);
             osc2.stop(now + 0.2);
 
-            // Clean up the context after the chime finishes
-            setTimeout(() => ctx.close(), 300);
+            // Clean up the context after the last oscillator ends
+            osc2.onended = () => ctx.close().catch(() => {});
         } catch (e) {
             console.warn('Could not play waiting chime:', e);
         }
@@ -797,8 +809,7 @@ class MessengerClient {
             }
 
             // Activate voice input and voice responses when mic is on
-            await this.updateVoiceInputState(true);
-            await this.updateVoiceResponses(true);
+            await this.updateVoiceActive(true);
         } catch (e) {
             console.error('Failed to start recognition:', e);
             alert('Failed to start speech recognition');
@@ -827,8 +838,7 @@ class MessengerClient {
         this.disconnectAudioWebSocket();
 
         // Deactivate voice input and voice responses when mic is turned off
-        await this.updateVoiceInputState(false);
-        await this.updateVoiceResponses(false);
+        await this.updateVoiceActive(false);
     }
 
     initializeSpeechRecognition() {
@@ -914,15 +924,15 @@ class MessengerClient {
         }
     }
 
-    async updateVoiceInputState(active) {
+    async updateVoiceActive(active) {
         try {
-            await fetch(`${this.baseUrl}/api/voice-input-state`, {
+            await fetch(`${this.baseUrl}/api/voice-active`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ active })
             });
         } catch (error) {
-            console.error('Failed to update voice input state:', error);
+            console.error('Failed to update voice active state:', error);
         }
     }
 
@@ -938,27 +948,9 @@ class MessengerClient {
         }
     }
 
-    async updateVoiceResponses(enabled) {
-        try {
-            // Save to localStorage
-            localStorage.setItem('voiceResponsesEnabled', enabled.toString());
-
-            // Update server
-            await fetch(`${this.baseUrl}/api/voice-preferences`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ voiceResponsesEnabled: enabled })
-            });
-        } catch (error) {
-            console.error('Failed to update voice responses:', error);
-        }
-    }
-
     async syncVoiceStateToServer() {
         // Re-send current browser voice state to the server after a session reset
-        await this.updateVoiceInputState(this.isListening);
-        // Voice responses are tied to listening state
-        await this.updateVoiceResponses(this.isListening);
+        await this.updateVoiceActive(this.isListening);
         await this.syncSelectedVoiceToServer();
     }
 

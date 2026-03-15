@@ -10,12 +10,11 @@ describe('conversation flow tracking', () => {
 
   beforeEach(() => {
     // Reset state
-    delete process.env.VOICE_RESPONSES_ENABLED;
+    delete process.env.VOICE_ACTIVE;
     lastToolUseTimestamp = null;
     lastSpeakTimestamp = null;
     voicePreferences = {
-      voiceResponsesEnabled: false,
-      voiceInputActive: false
+      voiceActive: false
     };
     
     // Mock queue
@@ -30,7 +29,7 @@ describe('conversation flow tracking', () => {
 
     // Pre-wait hook endpoint
     app.post('/api/hooks/pre-wait', (req, res) => {
-      const voiceResponsesEnabled = process.env.VOICE_RESPONSES_ENABLED === 'true';
+      const voiceActive = process.env.VOICE_ACTIVE === 'true';
 
       // Check for pending utterances
       const pendingUtterances = queue.utterances.filter((u: any) => u.status === 'pending');
@@ -43,7 +42,7 @@ describe('conversation flow tracking', () => {
       }
 
       // Check for delivered but unresponded utterances (when voice enabled)
-      if (voiceResponsesEnabled) {
+      if (voiceActive) {
         const deliveredUtterances = queue.utterances.filter((u: any) => u.status === 'delivered');
         if (deliveredUtterances.length > 0) {
           res.json({
@@ -55,7 +54,7 @@ describe('conversation flow tracking', () => {
       }
 
       // Check if spoken since last tool use (when voice enabled)
-      if (voiceResponsesEnabled && lastToolUseTimestamp && 
+      if (voiceActive && lastToolUseTimestamp && 
           (!lastSpeakTimestamp || lastSpeakTimestamp < lastToolUseTimestamp)) {
         res.json({
           decision: 'block',
@@ -72,7 +71,7 @@ describe('conversation flow tracking', () => {
 
     // Stop hook endpoint
     app.post('/api/hooks/stop', (req, res) => {
-      const voiceResponsesEnabled = process.env.VOICE_RESPONSES_ENABLED === 'true';
+      const voiceActive = process.env.VOICE_ACTIVE === 'true';
 
       // Check for pending utterances
       const pendingUtterances = queue.utterances.filter((u: any) => u.status === 'pending');
@@ -85,7 +84,7 @@ describe('conversation flow tracking', () => {
       }
 
       // Check for delivered but unresponded utterances (when voice enabled)
-      if (voiceResponsesEnabled) {
+      if (voiceActive) {
         const deliveredUtterances = queue.utterances.filter((u: any) => u.status === 'delivered');
         if (deliveredUtterances.length > 0) {
           res.json({
@@ -97,7 +96,7 @@ describe('conversation flow tracking', () => {
       }
 
       // Check if spoken since last tool use (when voice enabled)
-      if (voiceResponsesEnabled && lastToolUseTimestamp && 
+      if (voiceActive && lastToolUseTimestamp && 
           (!lastSpeakTimestamp || lastSpeakTimestamp < lastToolUseTimestamp)) {
         res.json({
           decision: 'block',
@@ -107,7 +106,7 @@ describe('conversation flow tracking', () => {
       }
 
       // Check if we should wait for utterances (only if voice input is active)
-      if (voicePreferences.voiceInputActive) {
+      if (voicePreferences.voiceActive) {
         res.json({
           decision: 'block',
           reason: 'Assistant tried to end its response. Stopping is not allowed without first checking for voice input. Assistant should now use wait_for_utterance to check for voice input'
@@ -176,7 +175,7 @@ describe('conversation flow tracking', () => {
 
   describe('pre-wait hook with voice responses enabled', () => {
     beforeEach(() => {
-      process.env.VOICE_RESPONSES_ENABLED = 'true';
+      process.env.VOICE_ACTIVE = 'true';
     });
 
     it('should block wait_for_utterance when not spoken after tool use', async () => {
@@ -262,7 +261,7 @@ describe('conversation flow tracking', () => {
 
   describe('stop hook with voice responses enabled', () => {
     beforeEach(() => {
-      process.env.VOICE_RESPONSES_ENABLED = 'true';
+      process.env.VOICE_ACTIVE = 'true';
     });
 
     it('should block stop when not spoken after tool use', async () => {
@@ -309,7 +308,7 @@ describe('conversation flow tracking', () => {
         .send({ text: 'Response' });
 
       // Enable voice input to test stop behavior
-      voicePreferences.voiceInputActive = true;
+      voicePreferences.voiceActive = true;
 
       const response = await request(app)
         .post('/api/hooks/stop')
@@ -355,7 +354,7 @@ describe('conversation flow tracking', () => {
 
     it('should block stop after clearing queue and adding new utterances', async () => {
       // Enable voice input for this test
-      voicePreferences.voiceInputActive = true;
+      voicePreferences.voiceActive = true;
 
       // Simulate tool use
       lastToolUseTimestamp = new Date();
@@ -398,7 +397,7 @@ describe('conversation flow tracking', () => {
 
     it('should require wait_for_utterance after clearing queue even without pending utterances', async () => {
       // Enable voice input for this test
-      voicePreferences.voiceInputActive = true;
+      voicePreferences.voiceActive = true;
 
       // Simulate tool use
       lastToolUseTimestamp = new Date();

@@ -21,21 +21,15 @@ describe('Session restart detection', () => {
     });
     expect(server.activeCompositeKey).toBe(JSON.stringify(['session-old', 'main']));
 
-    // Browser enables voice input and voice responses
-    await fetch(`${server.url}/api/voice-input`, {
+    // Browser enables voice
+    await fetch(`${server.url}/api/voice-active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true }),
     });
-    await fetch(`${server.url}/api/voice-responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
-    });
 
     const prefsBefore = server.getVoicePreferences();
-    expect(prefsBefore.voiceInputActive).toBe(true);
-    expect(prefsBefore.voiceResponsesEnabled).toBe(true);
+    expect(prefsBefore.voiceActive).toBe(true);
 
     // Claude restarts — new session_id arrives via hook
     await fetch(`${server.url}/api/hooks/post-tool`, {
@@ -49,8 +43,7 @@ describe('Session restart detection', () => {
 
     // Voice state should be reset
     const prefsAfter = server.getVoicePreferences();
-    expect(prefsAfter.voiceInputActive).toBe(false);
-    expect(prefsAfter.voiceResponsesEnabled).toBe(false);
+    expect(prefsAfter.voiceActive).toBe(false);
   });
 
   it('new session becomes active and hooks work correctly after restart', async () => {
@@ -60,7 +53,7 @@ describe('Session restart detection', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: 'session-old' }),
     });
-    await fetch(`${server.url}/api/voice-input`, {
+    await fetch(`${server.url}/api/voice-active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true }),
@@ -74,21 +67,15 @@ describe('Session restart detection', () => {
     });
 
     // Browser re-syncs voice state (simulating what syncVoiceStateToServer does)
-    await fetch(`${server.url}/api/voice-input`, {
+    await fetch(`${server.url}/api/voice-active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true }),
     });
-    await fetch(`${server.url}/api/voice-responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
-    });
 
     // New session should be active and voice should work
     const prefs = server.getVoicePreferences();
-    expect(prefs.voiceInputActive).toBe(true);
-    expect(prefs.voiceResponsesEnabled).toBe(true);
+    expect(prefs.voiceActive).toBe(true);
 
     // Stop hook on the new session should work as active (not inactive)
     // Add an utterance so stop hook has something to check
@@ -117,15 +104,10 @@ describe('Session restart detection', () => {
     });
 
     // Enable voice
-    await fetch(`${server.url}/api/voice-input`, {
+    await fetch(`${server.url}/api/voice-active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true }),
-    });
-    await fetch(`${server.url}/api/voice-responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
     });
 
     // Same session sends another hook — should NOT reset
@@ -136,8 +118,7 @@ describe('Session restart detection', () => {
     });
 
     const prefs = server.getVoicePreferences();
-    expect(prefs.voiceInputActive).toBe(true);
-    expect(prefs.voiceResponsesEnabled).toBe(true);
+    expect(prefs.voiceActive).toBe(true);
   });
 
   it('switches active to new session_id even if old session was recently active', async () => {
@@ -149,7 +130,7 @@ describe('Session restart detection', () => {
     });
 
     // Enable voice
-    await fetch(`${server.url}/api/voice-input`, {
+    await fetch(`${server.url}/api/voice-active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true }),
@@ -165,8 +146,7 @@ describe('Session restart detection', () => {
     expect(server.activeCompositeKey).toBe(JSON.stringify(['session-B', 'main']));
 
     const prefs = server.getVoicePreferences();
-    expect(prefs.voiceInputActive).toBe(false);
-    expect(prefs.voiceResponsesEnabled).toBe(false);
+    expect(prefs.voiceActive).toBe(false);
   });
 
   it('does not reset for subagent hooks within the same session', async () => {
@@ -178,7 +158,7 @@ describe('Session restart detection', () => {
     });
 
     // Enable voice
-    await fetch(`${server.url}/api/voice-input`, {
+    await fetch(`${server.url}/api/voice-active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true }),
@@ -192,7 +172,7 @@ describe('Session restart detection', () => {
     });
 
     const prefs = server.getVoicePreferences();
-    expect(prefs.voiceInputActive).toBe(true);
+    expect(prefs.voiceActive).toBe(true);
     expect(server.activeCompositeKey).toBe(JSON.stringify(['session-1', 'main']));
   });
 });

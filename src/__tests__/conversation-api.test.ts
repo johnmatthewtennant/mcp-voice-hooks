@@ -23,7 +23,7 @@ describe('Conversation API', () => {
 
     it('should include user message after posting utterance', async () => {
       // Enable voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
@@ -53,10 +53,10 @@ describe('Conversation API', () => {
 
     it('should include assistant message after speak is called', async () => {
       // Enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true })
+        body: JSON.stringify({ active: true })
       });
 
       // Call speak endpoint
@@ -83,16 +83,16 @@ describe('Conversation API', () => {
 
     it('should sync status updates between utterances and messages', async () => {
       // Enable voice input and responses
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
       });
 
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true })
+        body: JSON.stringify({ active: true })
       });
 
       // Add user message
@@ -136,16 +136,16 @@ describe('Conversation API', () => {
 
     it('should return messages in chronological order (oldest first)', async () => {
       // Enable voice input and responses
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
       });
 
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true })
+        body: JSON.stringify({ active: true })
       });
 
       // Add messages with small delays to ensure proper ordering

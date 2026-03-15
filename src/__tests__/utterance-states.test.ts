@@ -7,17 +7,11 @@ describe('utterance state transitions', () => {
     server = new TestServer();
     await server.start();
 
-    // Enable voice input and voice responses for tests
-    await fetch(`${server.url}/api/voice-input`, {
+    // Enable voice for tests
+    await fetch(`${server.url}/api/voice-active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true })
-    });
-
-    await fetch(`${server.url}/api/voice-responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true })
     });
   });
 

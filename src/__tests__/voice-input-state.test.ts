@@ -36,7 +36,7 @@ describe('Voice Input State Error Handling', () => {
 
     it('should dequeue utterances successfully when voice input is active', async () => {
       // Enable voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
@@ -70,7 +70,7 @@ describe('Voice Input State Error Handling', () => {
 
     it('should dequeue all pending utterances when voice input is active', async () => {
       // Enable voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
@@ -121,7 +121,7 @@ describe('Voice Input State Error Handling', () => {
 
     it('should process wait request when voice input is active', async () => {
       // Enable voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
@@ -150,7 +150,7 @@ describe('Voice Input State Error Handling', () => {
 
     it('should return immediately when voice input is deactivated during wait', async () => {
       // Enable voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
@@ -187,7 +187,7 @@ describe('Voice Input State Error Handling', () => {
       expect(response.status).toBe(400);
 
       // Activate voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
@@ -203,7 +203,7 @@ describe('Voice Input State Error Handling', () => {
 
     it('should prevent dequeue when voice input is deactivated', async () => {
       // Enable voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
@@ -231,7 +231,7 @@ describe('Voice Input State Error Handling', () => {
       });
 
       // Deactivate voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: false })

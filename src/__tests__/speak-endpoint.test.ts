@@ -32,10 +32,10 @@ describe('Speak Endpoint Integration Tests', () => {
 
     it('should return 200 success when voice responses are enabled', async () => {
       // Enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true })
+        body: JSON.stringify({ active: true })
       });
 
       // Then try to speak
@@ -84,10 +84,10 @@ describe('Speak Endpoint Integration Tests', () => {
 
     it('should handle voice preference state changes correctly', async () => {
       // Enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true })
+        body: JSON.stringify({ active: true })
       });
 
       // Speak should work
@@ -99,10 +99,10 @@ describe('Speak Endpoint Integration Tests', () => {
       expect(response.status).toBe(200);
 
       // Disable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: false })
+        body: JSON.stringify({ active: false })
       });
 
       // Speak should now fail
@@ -114,10 +114,10 @@ describe('Speak Endpoint Integration Tests', () => {
       expect(response.status).toBe(400);
 
       // Re-enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true })
+        body: JSON.stringify({ active: true })
       });
 
       // Speak should work again

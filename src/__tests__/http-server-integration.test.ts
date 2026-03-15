@@ -146,9 +146,9 @@ describe('HTTP Server Integration Tests', () => {
     });
   });
 
-  describe('POST /api/voice-input', () => {
-    it('should update voice input state', async () => {
-      const response = await fetch(`${server.url}/api/voice-input`, {
+  describe('POST /api/voice-active', () => {
+    it('should update voice active state', async () => {
+      const response = await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })
@@ -158,11 +158,11 @@ describe('HTTP Server Integration Tests', () => {
 
       expect(response.status).toBe(200);
       expect(data.success).toBe(true);
-      expect(server.getVoicePreferences().voiceInputActive).toBe(true);
+      expect(server.getVoicePreferences().voiceActive).toBe(true);
     });
 
     it('should return 400 when active is not boolean', async () => {
-      const response = await fetch(`${server.url}/api/voice-input`, {
+      const response = await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: 'yes' })
@@ -172,22 +172,6 @@ describe('HTTP Server Integration Tests', () => {
 
       expect(response.status).toBe(400);
       expect(data.error).toBe('active must be a boolean');
-    });
-  });
-
-  describe('POST /api/voice-responses', () => {
-    it('should update voice responses state', async () => {
-      const response = await fetch(`${server.url}/api/voice-responses`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true })
-      });
-
-      const data = await response.json() as any;
-
-      expect(response.status).toBe(200);
-      expect(data.success).toBe(true);
-      expect(server.getVoicePreferences().voiceResponsesEnabled).toBe(true);
     });
   });
 
@@ -247,7 +231,7 @@ describe('HTTP Server Integration Tests', () => {
 
     it('should dequeue pending utterances and mark them as delivered', async () => {
       // Enable voice input
-      await fetch(`${server.url}/api/voice-input`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: true })

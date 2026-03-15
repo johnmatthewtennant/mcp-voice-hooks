@@ -2,12 +2,12 @@ import { EventEmitter } from 'events';
 
 describe('Connection-drop timeout - Unit Tests', () => {
   let serverEvents: EventEmitter;
-  let voicePreferences: { voiceInputActive: boolean; voiceResponsesEnabled: boolean };
+  let voicePreferences: { voiceActive: boolean };
   let ttsClients: Map<any, string | null>;
 
   beforeEach(() => {
     serverEvents = new EventEmitter();
-    voicePreferences = { voiceInputActive: true, voiceResponsesEnabled: false };
+    voicePreferences = { voiceActive: true };
     ttsClients = new Map();
   });
 
@@ -37,8 +37,7 @@ describe('Connection-drop timeout - Unit Tests', () => {
     ttsClients.delete(client);
 
     if (ttsClients.size === 0) {
-      voicePreferences.voiceInputActive = false;
-      voicePreferences.voiceResponsesEnabled = false;
+      voicePreferences.voiceActive = false;
       serverEvents.emit('allClientsDisconnected');
     }
   }
@@ -94,7 +93,7 @@ describe('Connection-drop timeout - Unit Tests', () => {
     // First client disconnects — should NOT interrupt (one client remains)
     simulateClientDisconnect(client1);
     expect(ttsClients.size).toBe(1);
-    expect(voicePreferences.voiceInputActive).toBe(true);
+    expect(voicePreferences.voiceActive).toBe(true);
 
     // Second client disconnects after 10ms — should interrupt
     setTimeout(() => simulateClientDisconnect(client2), 10);
@@ -103,7 +102,7 @@ describe('Connection-drop timeout - Unit Tests', () => {
 
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(50);
-    expect(voicePreferences.voiceInputActive).toBe(false);
+    expect(voicePreferences.voiceActive).toBe(false);
     expect(ttsClients.size).toBe(0);
   });
 
@@ -117,8 +116,8 @@ describe('Connection-drop timeout - Unit Tests', () => {
 
     const loopPromise = (async () => {
       while (iterations < maxIterations) {
-        // Check voice input (same as waitForUtteranceCore)
-        if (!voicePreferences.voiceInputActive) {
+        // Check voice active (same as waitForUtteranceCore)
+        if (!voicePreferences.voiceActive) {
           return 'voice_deactivated';
         }
         iterations++;
@@ -134,7 +133,7 @@ describe('Connection-drop timeout - Unit Tests', () => {
 
     expect(result).toBe('voice_deactivated');
     // Should have run very few iterations (disconnect wakes the sleep immediately,
-    // next loop iteration sees voiceInputActive=false)
+    // next loop iteration sees voiceActive=false)
     expect(iterations).toBeLessThanOrEqual(2);
   });
 });

@@ -37,10 +37,10 @@ describe('Per-session state and session lifecycle', () => {
   describe('Backward compatibility', () => {
     it('single-session mode works without session_id in requests', async () => {
       // Enable voice
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true }),
+        body: JSON.stringify({ active: true }),
       });
 
       // Add utterance (no session_id in this endpoint, goes to active session)
@@ -102,10 +102,10 @@ describe('Per-session state and session lifecycle', () => {
 
     it('inactive session pre-speak stores message in conversation history', async () => {
       // Enable voice
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true }),
+        body: JSON.stringify({ active: true }),
       });
 
       // Set main agent as active
@@ -225,10 +225,10 @@ describe('Per-session state and session lifecycle', () => {
       });
 
       // Enable voice responses
-      await fetch(`${server.url}/api/voice-responses`, {
+      await fetch(`${server.url}/api/voice-active`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: true }),
+        body: JSON.stringify({ active: true }),
       });
 
       // Session-C created via stop (no prior tool use — lastToolUseTimestamp is null)
