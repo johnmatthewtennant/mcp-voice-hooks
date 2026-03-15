@@ -1,3 +1,95 @@
+// AudioPlayer: plays PCM16 audio chunks via AudioContext for WebSocket TTS streaming
+class AudioPlayer {
+    constructor() {
+        this.playbackContext = null; // Created lazily on unlock
+        this.nextStartTime = 0;
+        this.scheduledSources = [];
+        this.gainNode = null;
+        this.ttsActive = false;
+        this.currentAudioId = null;
+    }
+
+    // Must be called on user gesture (e.g., Start Listening tap)
+    async unlock() {
+        if (!this.playbackContext) {
+            this.playbackContext = new AudioContext({ sampleRate: 22050 });
+            this.gainNode = this.playbackContext.createGain();
+            this.gainNode.connect(this.playbackContext.destination);
+        }
+        await this.playbackContext.resume();
+        // Play silent buffer to warm up iOS audio pipeline
+        const silence = this.playbackContext.createBuffer(1, 1, 22050);
+        const source = this.playbackContext.createBufferSource();
+        source.buffer = silence;
+        source.connect(this.playbackContext.destination);
+        source.start();
+    }
+
+    prepareForPlayback(sampleRate, audioId) {
+        this.ttsActive = true;
+        this.currentAudioId = audioId;
+        // Reset scheduling so new audio starts from "now"
+        if (this.playbackContext) {
+            this.nextStartTime = this.playbackContext.currentTime;
+        }
+    }
+
+    // Convert Int16 PCM buffer to Float32
+    static int16ToFloat32(int16Array) {
+        const float32 = new Float32Array(int16Array.length);
+        for (let i = 0; i < int16Array.length; i++) {
+            float32[i] = int16Array[i] / 32768;
+        }
+        return float32;
+    }
+
+    // Schedule a PCM16 chunk for gapless playback
+    playPCMChunk(pcm16Buffer, sampleRate = 22050) {
+        if (!this.playbackContext || this.playbackContext.state !== 'running') return;
+
+        const int16 = new Int16Array(pcm16Buffer);
+        const float32 = AudioPlayer.int16ToFloat32(int16);
+        const audioBuffer = this.playbackContext.createBuffer(1, float32.length, sampleRate);
+        audioBuffer.copyToChannel(float32, 0);
+
+        const source = this.playbackContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.gainNode || this.playbackContext.destination);
+
+        const now = this.playbackContext.currentTime;
+        const startTime = Math.max(now, this.nextStartTime);
+        source.start(startTime);
+        this.nextStartTime = startTime + audioBuffer.duration;
+        this.scheduledSources.push(source);
+
+        // Clean up finished sources
+        source.onended = () => {
+            const idx = this.scheduledSources.indexOf(source);
+            if (idx !== -1) this.scheduledSources.splice(idx, 1);
+        };
+    }
+
+    finishPlayback() {
+        this.ttsActive = false;
+        this.currentAudioId = null;
+    }
+
+    clear() {
+        // Stop all scheduled sources
+        for (const source of this.scheduledSources) {
+            try { source.stop(); } catch (_e) { /* may already be stopped */ }
+        }
+        this.scheduledSources = [];
+        this.nextStartTime = 0;
+        this.ttsActive = false;
+        this.currentAudioId = null;
+    }
+
+    isPlaying() {
+        return this.ttsActive || this.scheduledSources.length > 0;
+    }
+}
+
 class MessengerClient {
     constructor() {
         this.baseUrl = window.location.origin;
@@ -55,6 +147,18 @@ class MessengerClient {
         this.audioQueue = [];
         this.audioPlaying = false;
         this.currentAudio = null;
+
+        // WebSocket audio capture state
+        this.audioWs = null;
+        this.audioContext = null;
+        this.audioWorkletNode = null;
+        this.mediaStream = null;
+        this.wsReconnectTimer = null;
+        this.wsReconnectDelay = 1000; // exponential backoff start
+
+        // WebSocket TTS audio player
+        this.audioPlayer = new AudioPlayer();
+        this.wsConnected = false;
 
         // Session state
         this.sessions = [];
@@ -142,11 +246,16 @@ class MessengerClient {
                         this.speakText(data.text);
                     }
                 } else if (data.type === 'tts-audio' && data.audioUrl) {
-                    // Server-rendered audio ready — queue for playback
-                    this.audioQueue.push(data.audioUrl);
-                    this.processAudioQueue();
+                    // Server-rendered audio ready — queue for playback (SSE fallback)
+                    // Skip if WS is connected (audio arrives as binary frames)
+                    if (!this.wsConnected) {
+                        this.audioQueue.push(data.audioUrl);
+                        this.processAudioQueue();
+                    }
                 } else if (data.type === 'tts-clear') {
                     this.clearAudioQueue();
+                    // Also clear WS audio player
+                    this.audioPlayer.clear();
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
                 } else if (data.type === 'session-reset') {
@@ -871,6 +980,14 @@ class MessengerClient {
             this.isListening = true;
             this.micBtn.classList.add('listening');
 
+            // Unlock AudioPlayer on user gesture (iOS Safari requirement)
+            await this.audioPlayer.unlock();
+
+            // Open WebSocket and start audio capture alongside Web Speech API
+            this.connectAudioWebSocket();
+            // Wait briefly for WS to connect before starting capture
+            setTimeout(() => this.startAudioCapture(), 200);
+
             // Activate voice input when mic is on
             await this.updateVoiceInputState(true);
         } catch (e) {
@@ -905,6 +1022,10 @@ class MessengerClient {
 
             this.isInterimText = false;
             this.messageInput.style.height = 'auto';
+
+            // Stop audio capture and disconnect WebSocket
+            this.stopAudioCapture();
+            this.disconnectAudioWebSocket();
 
             // Deactivate voice input when mic is turned off
             await this.updateVoiceInputState(false);
@@ -1122,6 +1243,210 @@ class MessengerClient {
         } catch (error) {
             console.error('Failed to update background enforcement:', error);
         }
+    }
+
+    // ── WebSocket audio capture ──────────────────────────────────────
+
+    connectAudioWebSocket() {
+        if (this.audioWs && (this.audioWs.readyState === WebSocket.OPEN || this.audioWs.readyState === WebSocket.CONNECTING)) {
+            return; // Already connected or connecting
+        }
+
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${location.host}/ws/audio`;
+        this.debugLog('[WS] Connecting to', wsUrl);
+
+        this.audioWs = new WebSocket(wsUrl);
+        this.audioWs.binaryType = 'arraybuffer';
+
+        this.audioWs.onopen = () => {
+            this.debugLog('[WS] Connected');
+            this.wsConnected = true;
+            this.wsReconnectDelay = 1000; // Reset backoff on successful connect
+        };
+
+        this.audioWs.onmessage = (event) => {
+            if (typeof event.data === 'string') {
+                try {
+                    const msg = JSON.parse(event.data);
+                    this.handleWsMessage(msg);
+                } catch (e) {
+                    console.error('[WS] Failed to parse message:', e);
+                }
+            }
+            } else if (event.data instanceof ArrayBuffer) {
+                // Binary frame = TTS audio PCM data
+                if (this.audioPlayer.ttsActive) {
+                    this.audioPlayer.playPCMChunk(event.data);
+                }
+                return;
+        };
+
+        this.audioWs.onclose = () => {
+            this.debugLog('[WS] Disconnected');
+            this.wsConnected = false;
+            this.audioWs = null;
+            // Reconnect if still listening
+            if (this.isListening) {
+                this.scheduleWsReconnect();
+            }
+        };
+
+        this.audioWs.onerror = (err) => {
+            console.error('[WS] Error:', err);
+        };
+    }
+
+    handleWsMessage(msg) {
+        switch (msg.type) {
+            case 'tts-start':
+                this.debugLog('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate);
+                this.audioPlayer.prepareForPlayback(msg.sampleRate, msg.audioId);
+                // Echo suppression: mute mic audio streaming during TTS playback
+                this._muteAudioCapture(true);
+                break;
+            case 'tts-end':
+                this.debugLog('[WS] TTS end:', msg.audioId);
+                this.audioPlayer.finishPlayback();
+                // Send tts-ack to server
+                if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
+                    this.audioWs.send(JSON.stringify({ type: 'tts-ack', audioId: msg.audioId }));
+                }
+                // Un-mute mic audio streaming after TTS playback finishes
+                // Wait for remaining scheduled audio to finish
+                this._scheduleUnmute();
+                break;
+            case 'tts-clear':
+                this.debugLog('[WS] TTS clear');
+                this.audioPlayer.clear();
+                this._muteAudioCapture(false);
+                break;
+            case 'pong':
+                this.debugLog('[WS] Received pong');
+                break;
+            case 'error':
+                console.error('[WS] Server error:', msg.message);
+                break;
+            default:
+                this.debugLog('[WS] Unknown message type:', msg.type);
+        }
+    }
+
+    // Echo suppression: mute/unmute mic audio streaming
+    _muteAudioCapture(mute) {
+        this._micMuted = mute;
+    }
+
+    _scheduleUnmute() {
+        // Check periodically if audio player has finished all scheduled playback
+        const checkDone = () => {
+            if (!this.audioPlayer.isPlaying()) {
+                this._muteAudioCapture(false);
+            } else {
+                setTimeout(checkDone, 100);
+            }
+        };
+        setTimeout(checkDone, 100);
+    }
+
+    scheduleWsReconnect() {
+        if (this.wsReconnectTimer) return; // Already scheduled
+        this.debugLog(`[WS] Reconnecting in ${this.wsReconnectDelay}ms`);
+        this.wsReconnectTimer = setTimeout(() => {
+            this.wsReconnectTimer = null;
+            if (this.isListening) {
+                this.connectAudioWebSocket();
+            }
+        }, this.wsReconnectDelay);
+        // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
+        this.wsReconnectDelay = Math.min(this.wsReconnectDelay * 2, 30000);
+    }
+
+    disconnectAudioWebSocket() {
+        if (this.wsReconnectTimer) {
+            clearTimeout(this.wsReconnectTimer);
+            this.wsReconnectTimer = null;
+        }
+        if (this.audioWs) {
+            this.audioWs.close();
+            this.audioWs = null;
+        }
+    }
+
+    async startAudioCapture() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    echoCancellation: true,
+                    autoGainControl: true,
+                    noiseSuppression: true,
+                }
+            });
+            this.mediaStream = stream;
+
+            // Create AudioContext at native rate — worklet handles downsampling
+            this.audioContext = new AudioContext();
+            await this.audioContext.resume(); // Required on iOS after user gesture
+
+            const source = this.audioContext.createMediaStreamSource(stream);
+            await this.audioContext.audioWorklet.addModule('/audio-capture-worklet.js');
+
+            this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'audio-capture-processor');
+            this.audioWorkletNode.port.onmessage = (e) => {
+                if (e.data.type === 'audio-frame' && this.audioWs && this.audioWs.readyState === WebSocket.OPEN && !this._micMuted) {
+                    // Convert Float32 [-1,1] to Int16 PCM
+                    const float32 = e.data.frame;
+                    const pcm16 = new Int16Array(float32.length);
+                    for (let i = 0; i < float32.length; i++) {
+                        const s = Math.max(-1, Math.min(1, float32[i]));
+                        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    this.audioWs.send(pcm16.buffer);
+                }
+            };
+
+            source.connect(this.audioWorkletNode);
+            // Connect to destination to keep the worklet processing (required)
+            this.audioWorkletNode.connect(this.audioContext.destination);
+
+            // Send audio-start control message
+            if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
+                this.audioWs.send(JSON.stringify({
+                    type: 'audio-start',
+                    sampleRate: 16000,
+                    channels: 1,
+                    encoding: 'pcm16',
+                }));
+            }
+
+            this.debugLog('[Audio] Capture started, native rate:', this.audioContext.sampleRate);
+        } catch (err) {
+            console.error('[Audio] Failed to start capture:', err);
+        }
+    }
+
+    stopAudioCapture() {
+        // Send audio-stop control message
+        if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
+            this.audioWs.send(JSON.stringify({ type: 'audio-stop' }));
+        }
+
+        // Clean up AudioWorklet and context
+        if (this.audioWorkletNode) {
+            this.audioWorkletNode.disconnect();
+            this.audioWorkletNode = null;
+        }
+        if (this.audioContext) {
+            this.audioContext.close().catch(() => {});
+            this.audioContext = null;
+        }
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
+            this.mediaStream = null;
+        }
+
+        this.debugLog('[Audio] Capture stopped');
     }
 }
 

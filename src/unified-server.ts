@@ -12,6 +12,7 @@ import { exec, execFile, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import { promisify } from 'util';
 import fs from 'fs';
+import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -986,8 +987,8 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
     const disconnectedSessionKey = ttsClients.get(res);
     ttsClients.delete(res);
 
-    // If no clients remain, disable voice features
-    if (ttsClients.size === 0) {
+    // If no clients remain (SSE or WS), disable voice features
+    if (ttsClients.size === 0 && wsAudioClients.size === 0) {
       debugLog(`[SSE] Client disconnected: session=${disconnectedSessionKey || 'active'} (last client, disabling voice)`);
       if (voicePreferences.voiceInputActive || voicePreferences.voiceResponsesEnabled) {
         debugLog(`[SSE] Voice features disabled - Input: ${voicePreferences.voiceInputActive} -> false, Responses: ${voicePreferences.voiceResponsesEnabled} -> false`);
@@ -1047,6 +1048,198 @@ function notifyWaitStatus(isWaiting: boolean) {
   ttsClients.forEach((viewingKey, client) => {
     if (viewingKey === null || viewingKey === activeCompositeKey) {
       client.write(`data: ${message}\n\n`);
+    }
+  });
+}
+
+
+// ── WebSocket audio endpoint ──────────────────────────────────────────
+// Tracks connected WebSocket clients for bidirectional audio streaming.
+// Phase 1: receives binary audio frames and control messages; no speech
+// recognition yet.
+
+interface WsAudioClient {
+  ws: WebSocket;
+  sessionKey: string | null;
+  isCapturing: boolean;       // true between audio-start and audio-stop
+  frameCount: number;         // binary frames received
+  byteCount: number;          // total bytes of audio data received
+  connectedAt: Date;
+  pingTimer: ReturnType<typeof setInterval> | null;
+  ttsActive: boolean;         // true between tts-start and tts-end
+  currentAudioId: string | null; // audioId of current TTS stream
+}
+
+const wsAudioClients = new Set<WsAudioClient>();
+const wss = new WebSocketServer({ noServer: true });
+
+wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
+  const url = new URL(request.url!, `http://${request.headers.host}`);
+  const sessionKey = url.searchParams.get('session') || null;
+
+  const client: WsAudioClient = {
+    ws,
+    sessionKey,
+    isCapturing: false,
+    frameCount: 0,
+    byteCount: 0,
+    connectedAt: new Date(),
+    pingTimer: null,
+    ttsActive: false,
+    currentAudioId: null,
+  };
+
+  wsAudioClients.add(client);
+  debugLog(`[WS] Audio client connected: session=${sessionKey || 'active'} (${wsAudioClients.size} total)`);
+
+  // Heartbeat: send ping every 30s to keep mobile connections alive
+  client.pingTimer = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.ping();
+    }
+  }, 30_000);
+
+  ws.on('pong', () => {
+    debugLog('[WS] Received pong');
+  });
+
+  ws.on('message', (data: Buffer | string, isBinary: boolean) => {
+    if (isBinary) {
+      // Binary frame = raw PCM audio data
+      const buf = data as Buffer;
+      client.frameCount++;
+      client.byteCount += buf.length;
+
+      if (client.frameCount % 50 === 1) {
+        // Log every ~1 second (50 frames * 20ms = 1s)
+        debugLog(`[WS] Audio: frame=${client.frameCount} bytes=${client.byteCount} (this=${buf.length})`);
+      }
+      // Phase 1: just receive and count. Phase 2 will pipe to speech recognizer.
+    } else {
+      // Text frame = JSON control message
+      try {
+        const msg = JSON.parse(data.toString());
+        handleWsControlMessage(client, msg);
+      } catch (err) {
+        debugLog(`[WS] Invalid JSON from client: ${err}`);
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+      }
+    }
+  });
+
+  ws.on('close', () => {
+    if (client.pingTimer) clearInterval(client.pingTimer);
+    wsAudioClients.delete(client);
+    debugLog(`[WS] Audio client disconnected: session=${sessionKey || 'active'} frames=${client.frameCount} bytes=${client.byteCount} (${wsAudioClients.size} remaining)`);
+
+    // If no clients remain (SSE or WS), disable voice features
+    if (ttsClients.size === 0 && wsAudioClients.size === 0) {
+      debugLog(`[WS] Last client disconnected, disabling voice features`);
+      if (voicePreferences.voiceInputActive || voicePreferences.voiceResponsesEnabled) {
+        voicePreferences.voiceInputActive = false;
+        voicePreferences.voiceResponsesEnabled = false;
+      }
+      serverEvents.emit('allClientsDisconnected');
+    }
+  });
+
+  ws.on('error', (err) => {
+    debugLog(`[WS] Client error: ${err.message}`);
+  });
+});
+
+function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key: string]: unknown }) {
+  switch (msg.type) {
+    case 'audio-start':
+      client.isCapturing = true;
+      client.frameCount = 0;
+      client.byteCount = 0;
+      debugLog(`[WS] audio-start: sampleRate=${msg.sampleRate} channels=${msg.channels} encoding=${msg.encoding}`);
+      break;
+
+    case 'audio-stop':
+      client.isCapturing = false;
+      debugLog(`[WS] audio-stop: total frames=${client.frameCount} bytes=${client.byteCount}`);
+      break;
+
+    case 'tts-ack':
+      debugLog(`[WS] Received tts-ack for audioId=${msg.audioId}`);
+      break;
+
+    case 'ping':
+      client.ws.send(JSON.stringify({ type: 'pong' }));
+      break;
+
+    default:
+      debugLog(`[WS] Unknown message type: ${msg.type}`);
+      break;
+  }
+}
+
+// Find a connected WebSocket client for a given session key
+function findWsClientForSession(targetKey: string | null): WsAudioClient | null {
+  for (const client of wsAudioClients) {
+    if (client.ws.readyState === WebSocket.OPEN) {
+      if (client.sessionKey === null || client.sessionKey === targetKey) {
+        return client;
+      }
+    }
+  }
+  return null;
+}
+
+// Stream rendered TTS WAV file as PCM chunks over WebSocket
+const TTS_WS_CHUNK_SIZE = 4096; // bytes per binary frame
+const WAV_HEADER_SIZE = 44;     // standard WAV header
+
+async function streamTtsOverWs(client: WsAudioClient, filePath: string, audioId: string): Promise<void> {
+  const { ws } = client;
+
+  // Send tts-start message
+  ws.send(JSON.stringify({
+    type: 'tts-start',
+    audioId,
+    sampleRate: 22050,
+    channels: 1,
+  }));
+
+  client.ttsActive = true;
+  client.currentAudioId = audioId;
+
+  // Read WAV file, strip header, send PCM data in chunks
+  const fileData = await fs.promises.readFile(filePath);
+  const pcmData = fileData.subarray(WAV_HEADER_SIZE);
+
+  for (let offset = 0; offset < pcmData.length; offset += TTS_WS_CHUNK_SIZE) {
+    if (ws.readyState !== WebSocket.OPEN) break;
+    const chunk = pcmData.subarray(offset, Math.min(offset + TTS_WS_CHUNK_SIZE, pcmData.length));
+    ws.send(chunk);
+  }
+
+  // Send tts-end message
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: 'tts-end',
+      audioId,
+    }));
+  }
+
+  client.ttsActive = false;
+  client.currentAudioId = null;
+
+  debugLog(`[WS TTS] Streamed ${pcmData.length} bytes for audioId=${audioId}`);
+}
+
+// Attach WebSocket upgrade handler to an HTTP(S) server
+function attachWsUpgrade(server: http.Server | https.Server) {
+  server.on('upgrade', (request, socket, head) => {
+    const url = new URL(request.url!, `http://${request.headers.host}`);
+    if (url.pathname === '/ws/audio') {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit('connection', ws, request);
+      });
+    } else {
+      socket.destroy();
     }
   });
 }
@@ -1282,6 +1475,9 @@ app.get('/messenger', (_req: Request, res: Response) => {
 let eaddrinuseDetected = false;
 const httpServer = http.createServer(app);
 
+// Attach WebSocket upgrade handler to HTTP server
+attachWsUpgrade(httpServer);
+
 // Handle EADDRINUSE: another instance already owns the HTTP server.
 // This process will run as MCP shim only, proxying speak calls to the existing server.
 httpServer.on('error', (err: NodeJS.ErrnoException) => {
@@ -1320,7 +1516,7 @@ httpServer.listen(HTTP_PORT, async () => {
   const autoOpenBrowser = process.env.MCP_VOICE_HOOKS_AUTO_OPEN_BROWSER !== 'false'; // Default to true
   if (IS_MCP_MANAGED && autoOpenBrowser) {
     setTimeout(async () => {
-      if (ttsClients.size === 0) {
+      if (ttsClients.size === 0 && wsAudioClients.size === 0) {
         debugLog('[Browser] No frontend connected, opening browser...');
         try {
           const open = (await import('open')).default;
@@ -1330,7 +1526,7 @@ httpServer.listen(HTTP_PORT, async () => {
           debugLog('[Browser] Failed to open browser:', error);
         }
       } else {
-        debugLog(`[Browser] Frontend already connected (${ttsClients.size} client(s))`)
+        debugLog(`[Browser] Frontend already connected (${ttsClients.size} SSE + ${wsAudioClients.size} WS client(s))`)
       }
     }, 3000);
   }
@@ -1378,6 +1574,9 @@ function startHttpsServer() {
       cert: fs.readFileSync(certPath),
     };
     const httpsServer = https.createServer(httpsOptions, app);
+
+    // Attach WebSocket upgrade handler to HTTPS server
+    attachWsUpgrade(httpsServer);
 
     httpsServer.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
