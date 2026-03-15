@@ -1341,25 +1341,33 @@ class MessengerClient {
                     this.loadData();
                 }
                 break;
-            case 'tts-start':
-                console.log('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate);
-                this.voiceState.setTtsActive(true);
+            case 'tts-start': {
+                const isSfx = msg.kind === 'sfx';
+                console.log('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate, 'kind:', msg.kind || 'tts');
                 this.audioPlayer.prepareForPlayback(msg.sampleRate, msg.audioId);
-                // Echo suppression: mute mic audio streaming during TTS playback
-                this._muteAudioCapture(true);
-                break;
-            case 'tts-end':
-                this.debugLog('[WS] TTS end:', msg.audioId);
-                this.audioPlayer.finishPlayback();
-                this.voiceState.setTtsActive(false);
-                // Send tts-ack to server
-                if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
-                    this.audioWs.send(JSON.stringify({ type: 'tts-ack', audioId: msg.audioId }));
+                if (!isSfx) {
+                    this.voiceState.setTtsActive(true);
+                    // Echo suppression: mute mic audio streaming during TTS playback
+                    this._muteAudioCapture(true);
                 }
-                // Un-mute mic audio streaming after TTS playback finishes
-                // Wait for remaining scheduled audio to finish
-                this._scheduleUnmute();
                 break;
+            }
+            case 'tts-end': {
+                const isSfx = msg.kind === 'sfx';
+                this.debugLog('[WS] TTS end:', msg.audioId, 'kind:', msg.kind || 'tts');
+                this.audioPlayer.finishPlayback();
+                if (!isSfx) {
+                    this.voiceState.setTtsActive(false);
+                    // Send tts-ack to server
+                    if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
+                        this.audioWs.send(JSON.stringify({ type: 'tts-ack', audioId: msg.audioId }));
+                    }
+                    // Un-mute mic audio streaming after TTS playback finishes
+                    // Wait for remaining scheduled audio to finish
+                    this._scheduleUnmute();
+                }
+                break;
+            }
             case 'tts-clear':
                 this.debugLog('[WS] TTS clear');
                 this.audioPlayer.clear();

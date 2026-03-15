@@ -55,12 +55,15 @@ async function processTtsQueue() {
     const targetKey = item.sessionKey || activeCompositeKey;
     const wsClient = findWsClientForSession(targetKey);
     if (wsClient && wsClient.ws.readyState === WebSocket.OPEN) {
-      await streamTtsOverWs(wsClient, filePath, audioId);
+      serverAudioState.setTtsActive(true);
+      await streamTtsOverWs(wsClient, filePath, audioId, 'tts');
+      serverAudioState.setTtsActive(false);
     } else {
       debugLog(`[TTS] No WebSocket client found for session — skipping audio delivery (text already sent via SSE)`);
     }
     item.resolve(audioId);
   } catch (error) {
+    serverAudioState.setTtsActive(false);
     item.reject(error instanceof Error ? error : new Error(String(error)));
   } finally {
     ttsPlaying = false;
@@ -317,6 +320,161 @@ function cleanupSounds(): void {
 process.on('exit', cleanupSounds);
 process.on('SIGINT', () => { cleanupSounds(); process.exit(0); });
 process.on('SIGTERM', () => { cleanupSounds(); process.exit(0); });
+
+// Server-side audio state machine — mirrors browser VoiceStateMachine logic
+// but plays sounds by streaming pre-rendered WAV files over WebSocket
+class ServerAudioState {
+  static _sfxCounter = 0; // monotonic counter for unique SFX audioIds
+  state: 'inactive' | 'listening' | 'processing' | 'speaking' = 'inactive';
+  private _isListening = false;
+  private _waitStatusKnown = false;
+  private _lastWaitStatus = false;
+  private _ttsActive = false;
+  private _pulseTimer: ReturnType<typeof setInterval> | null = null;
+  private _chimeDelayTimer: ReturnType<typeof setTimeout> | null = null;
+
+  syncState(): void {
+    let desired: typeof this.state;
+    if (!this._isListening) {
+      desired = 'inactive';
+    } else if (this._ttsActive) {
+      desired = 'speaking';
+    } else if (!this._waitStatusKnown) {
+      desired = 'inactive';
+    } else if (this._lastWaitStatus) {
+      desired = 'listening';
+    } else {
+      desired = 'processing';
+    }
+    if (desired !== this.state) {
+      this._transition(desired);
+    }
+  }
+
+  setListening(isListening: boolean): void {
+    this._isListening = isListening;
+    if (isListening) {
+      this._lastWaitStatus = false;
+      this._waitStatusKnown = false;
+      this._ttsActive = false;
+    }
+    this.syncState();
+  }
+
+  setWaitStatus(isWaiting: boolean): void {
+    this._waitStatusKnown = true;
+    this._lastWaitStatus = isWaiting;
+    this.syncState();
+  }
+
+  setTtsActive(active: boolean): void {
+    this._ttsActive = active;
+    this.syncState();
+  }
+
+  private _transition(newState: typeof this.state): void {
+    const oldState = this.state;
+    this.state = newState;
+    this._stopPulseTimer();
+    this._cancelChimeDelay();
+
+    debugLog(`[ServerAudio] ${oldState} -> ${newState}`);
+
+    switch (newState) {
+      case 'inactive':
+        break;
+
+      case 'listening':
+        // Delay chime to let TTS finish draining from AudioPlayer
+        this._scheduleChimeThenPulses();
+        break;
+
+      case 'processing':
+        this._startPulseTimer('processing');
+        break;
+
+      case 'speaking':
+        // No sounds during TTS
+        break;
+    }
+  }
+
+  private _scheduleChimeThenPulses(): void {
+    // Wait 600ms for any final TTS chunks to drain, then play chime
+    this._chimeDelayTimer = setTimeout(() => {
+      this._chimeDelayTimer = null;
+      if (this.state !== 'listening') return;
+      this._streamSound('chime');
+      // Start listening pulses after chime (chime is ~200ms)
+      setTimeout(() => {
+        if (this.state === 'listening') {
+          this._startPulseTimer('listening');
+        }
+      }, 300);
+    }, 600);
+  }
+
+  private _startPulseTimer(type: 'listening' | 'processing'): void {
+    const interval = type === 'listening' ? 7000 : 5000;
+    const soundKey = type === 'listening' ? 'listeningPulse' : 'processingPulse';
+
+    // Play first pulse immediately
+    this._streamSound(soundKey);
+
+    this._pulseTimer = setInterval(() => {
+      if (this.state !== type) {
+        this._stopPulseTimer();
+        return;
+      }
+      this._streamSound(soundKey);
+    }, interval);
+  }
+
+  private _stopPulseTimer(): void {
+    if (this._pulseTimer !== null) {
+      clearInterval(this._pulseTimer);
+      this._pulseTimer = null;
+    }
+  }
+
+  private _cancelChimeDelay(): void {
+    if (this._chimeDelayTimer !== null) {
+      clearTimeout(this._chimeDelayTimer);
+      this._chimeDelayTimer = null;
+    }
+  }
+
+  private _streamSound(soundKey: keyof SoundLibrary): void {
+    const filePath = sounds[soundKey];
+    if (!filePath) return;
+
+    // Find a connected WS client to stream to
+    const targetKey = activeCompositeKey;
+    const wsClient = findWsClientForSession(targetKey);
+    if (!wsClient || wsClient.ws.readyState !== WebSocket.OPEN) return;
+
+    // Stream the pre-rendered WAV — reuse the existing TTS streaming function
+    const audioId = `sfx-${soundKey}-${ServerAudioState._sfxCounter++}`;
+    streamTtsOverWs(wsClient, filePath, audioId, 'sfx').catch(err => {
+      debugLog(`[ServerAudio] Failed to stream ${soundKey}: ${err}`);
+    });
+  }
+
+  destroy(): void {
+    this._stopPulseTimer();
+    this._cancelChimeDelay();
+    this.state = 'inactive';
+  }
+}
+
+const serverAudioState = new ServerAudioState();
+
+// Centralized voice-active setter — updates both voicePreferences and ServerAudioState
+function setVoiceActive(active: boolean): void {
+  voicePreferences.voiceActive = active;
+  serverAudioState.setListening(active);
+  debugLog(`[VoiceActive] ${active ? 'activated' : 'deactivated'}`);
+}
 
 // Background voice enforcement: when enabled, inactive sessions get
 // voiceActive=true in hook responses for inactive sessions,
@@ -877,7 +1035,7 @@ function registerIfFirst(key: string): void {
       const oldKey = activeCompositeKey;
       activeCompositeKey = key;
       debugLog(`[Session] New Claude session detected: ${oldKey} → ${key}`);
-      voicePreferences.voiceActive = false;
+      setVoiceActive(false);
       debugLog(`[Session] Voice state reset for new session`);
       notifySessionReset();
     }
@@ -1047,7 +1205,7 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
       debugLog(`[SSE] Client disconnected: session=${disconnectedSessionKey || 'active'} (last client, disabling voice)`);
       if (voicePreferences.voiceActive) {
         debugLog(`[SSE] Voice features disabled - voiceActive: ${voicePreferences.voiceActive} -> false`);
-        voicePreferences.voiceActive = false;
+        setVoiceActive(false);
       }
       serverEvents.emit('allClientsDisconnected');
     } else {
@@ -1100,6 +1258,8 @@ function notifyWaitStatus(isWaiting: boolean) {
       client.write(`data: ${message}\n\n`);
     }
   });
+  // Drive server-side audio state
+  serverAudioState.setWaitStatus(isWaiting);
 }
 
 
@@ -1118,6 +1278,7 @@ interface WsAudioClient {
   ttsActive: boolean;         // true between tts-start and tts-end
   currentAudioId: string | null; // audioId of current TTS stream
   recognizer: SpeechRecognizer | null; // speech recognition process (Phase 2)
+  streamMutex: Promise<void>;  // serializes outbound audio streams
 }
 
 const wsAudioClients = new Set<WsAudioClient>();
@@ -1150,6 +1311,7 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
     ttsActive: false,
     currentAudioId: null,
     recognizer: null,
+    streamMutex: Promise.resolve(),
   };
 
   wsAudioClients.add(client);
@@ -1207,7 +1369,7 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
     if (ttsClients.size === 0 && wsAudioClients.size === 0) {
       debugLog(`[WS] Last client disconnected, disabling voice features`);
       if (voicePreferences.voiceActive) {
-        voicePreferences.voiceActive = false;
+        setVoiceActive(false);
       }
       serverEvents.emit('allClientsDisconnected');
     }
@@ -1331,19 +1493,48 @@ function findWavDataOffset(buf: Buffer): number {
   return 44; // fallback
 }
 
-async function streamTtsOverWs(client: WsAudioClient, filePath: string, audioId: string): Promise<void> {
+// Per-client output mutex prevents interleaved binary frames when TTS and SFX
+// streams fire close together. Uses acquire/release pattern — the body runs from
+// both fulfillment and rejection paths of the prior chain entry.
+async function streamTtsOverWs(client: WsAudioClient, filePath: string, audioId: string, kind: 'tts' | 'sfx' = 'tts'): Promise<void> {
+  let streamError: Error | null = null;
+  let releaseResolve: () => void;
+  const released = new Promise<void>(r => { releaseResolve = r; });
+
+  const runBody = async () => {
+    try {
+      await _streamTtsOverWsInner(client, filePath, audioId, kind);
+    } catch (e) {
+      streamError = e instanceof Error ? e : new Error(String(e));
+    } finally {
+      releaseResolve!();
+    }
+  };
+
+  // Chain: run body regardless of prior outcome
+  client.streamMutex = client.streamMutex.then(runBody, runBody);
+
+  await released;
+  if (streamError) throw streamError;
+}
+
+async function _streamTtsOverWsInner(client: WsAudioClient, filePath: string, audioId: string, kind: 'tts' | 'sfx'): Promise<void> {
   const { ws } = client;
 
-  // Send tts-start message
+  // Send tts-start with kind field
   ws.send(JSON.stringify({
     type: 'tts-start',
     audioId,
     sampleRate: 22050,
     channels: 1,
+    kind,  // 'tts' or 'sfx' — browser uses this to decide echo suppression
   }));
 
-  client.ttsActive = true;
-  client.currentAudioId = audioId;
+  // Track per-client WS state only for TTS (not SFX)
+  if (kind === 'tts') {
+    client.ttsActive = true;
+    client.currentAudioId = audioId;
+  }
 
   // Read WAV file, find actual data chunk, send PCM data in chunks
   const fileData = await fs.promises.readFile(filePath);
@@ -1356,18 +1547,21 @@ async function streamTtsOverWs(client: WsAudioClient, filePath: string, audioId:
     ws.send(chunk);
   }
 
-  // Send tts-end message
+  // Send tts-end with kind field
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       type: 'tts-end',
       audioId,
+      kind,
     }));
   }
 
-  client.ttsActive = false;
-  client.currentAudioId = null;
+  if (kind === 'tts') {
+    client.ttsActive = false;
+    client.currentAudioId = null;
+  }
 
-  debugLog(`[WS TTS] Streamed ${pcmData.length} bytes for audioId=${audioId}`);
+  debugLog(`[WS TTS] Streamed ${pcmData.length} bytes for audioId=${audioId} kind=${kind}`);
 }
 
 // Attach WebSocket upgrade handler to an HTTP(S) server
@@ -1402,9 +1596,7 @@ app.post('/api/voice-active', (req: Request, res: Response) => {
     return;
   }
 
-  voicePreferences.voiceActive = active;
-
-  debugLog(`[Voice] ${voicePreferences.voiceActive ? 'Activated' : 'Deactivated'}`);
+  setVoiceActive(active);
 
   res.json({
     success: true,
