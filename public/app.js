@@ -206,8 +206,9 @@ class MessengerClient {
     handleWaitStatus(isWaiting) {
         const waitingIndicator = document.getElementById('waitingIndicator');
         if (waitingIndicator) {
+            const wasAtBottom = this.isUserNearBottom();
             waitingIndicator.style.display = isWaiting ? 'block' : 'none';
-            if (isWaiting) {
+            if (isWaiting && wasAtBottom) {
                 this.scrollToBottom();
             }
         }
@@ -550,6 +551,9 @@ class MessengerClient {
         // Get waiting indicator to insert messages before it
         const waitingIndicator = container.querySelector('.waiting-indicator');
 
+        // Check if user is near bottom before adding content
+        const wasAtBottom = this.isUserNearBottom();
+
         // Only render new messages and update status for existing ones
         messages.forEach(message => {
             if (!existingIds.has(message.id)) {
@@ -591,7 +595,10 @@ class MessengerClient {
             }
         });
 
-        this.scrollToBottom();
+        // Only auto-scroll if user was already at the bottom
+        if (wasAtBottom) {
+            this.scrollToBottom();
+        }
     }
 
     createMessageBubble(message) {
@@ -643,6 +650,11 @@ class MessengerClient {
         bubble.appendChild(messageMeta);
 
         return bubble;
+    }
+
+    isUserNearBottom() {
+        const container = this.conversationContainer;
+        return container.scrollHeight - container.scrollTop - container.clientHeight < 50;
     }
 
     scrollToBottom() {
