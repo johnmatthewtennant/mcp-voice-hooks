@@ -805,13 +805,29 @@ function registerIfFirst(key: string): void {
     activeCompositeKey = key;
     debugLog(`[Session] Active changed: ${null} → ${key}`);
   } else {
-    // If the current active is a default session and this is a real session, upgrade
     const currentActive = sessions.get(activeCompositeKey);
-    if (currentActive && currentActive.sessionId === 'default') {
-      const parsed = JSON.parse(key) as [string, string];
-      if (parsed[0] !== 'default') {
+    const parsed = JSON.parse(key) as [string, string];
+    const newSessionId = parsed[0];
+
+    if (currentActive && currentActive.sessionId === 'default' && newSessionId !== 'default') {
+      // If the current active is a default session and this is a real session, upgrade
+      activeCompositeKey = key;
+      debugLog(`[Session] Active upgraded from default → ${key}`);
+    } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
+      // Different session_id from the active one. This is either:
+      // 1. A restart: old Claude exited, new one started (old session is stale)
+      // 2. Concurrent: two Claude instances running simultaneously
+      // Distinguish by checking if the old session is stale (no hook activity recently).
+      const staleness = Date.now() - currentActive.lastActivity.getTime();
+      const STALE_THRESHOLD_MS = 5000; // 5 seconds
+      if (staleness > STALE_THRESHOLD_MS) {
+        const oldKey = activeCompositeKey;
         activeCompositeKey = key;
-        debugLog(`[Session] Active upgraded from default → ${key}`);
+        debugLog(`[Session] New Claude session detected (old stale for ${staleness}ms): ${oldKey} → ${key}`);
+        voicePreferences.voiceResponsesEnabled = false;
+        voicePreferences.voiceInputActive = false;
+        debugLog(`[Session] Voice state reset for new session`);
+        notifySessionReset();
       }
     }
   }
@@ -1018,6 +1034,16 @@ function notifyTTSClear() {
   ttsClients.forEach((_viewingKey, client) => {
     client.write(`data: ${message}\n\n`);
   });
+}
+
+// Helper function to notify all SSE clients that a new Claude session started
+// so the browser can re-sync its voice state with the server
+function notifySessionReset() {
+  const message = JSON.stringify({ type: 'session-reset' });
+  ttsClients.forEach((_viewingKey, client) => {
+    client.write(`data: ${message}\n\n`);
+  });
+  debugLog(`[SSE] Sent session-reset to ${ttsClients.size} client(s)`);
 }
 
 // Helper function to notify clients viewing the active session about wait status

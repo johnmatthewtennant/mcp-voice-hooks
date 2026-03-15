@@ -144,6 +144,10 @@ class MessengerClient {
                     this.clearAudioQueue();
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
+                } else if (data.type === 'session-reset') {
+                    // New Claude session started — re-sync our voice state with the server
+                    console.log('[SSE] New Claude session detected, re-syncing voice state');
+                    this.syncVoiceStateToServer();
                 }
             } catch (error) {
                 console.error('Failed to parse TTS event:', error);
@@ -1075,6 +1079,14 @@ class MessengerClient {
         } catch (error) {
             console.error('Failed to update voice responses:', error);
         }
+    }
+
+    async syncVoiceStateToServer() {
+        // Re-send current browser voice state to the server after a session reset
+        await this.updateVoiceInputState(this.isListening);
+        const voiceResponsesEnabled = this.voiceResponsesToggle ? this.voiceResponsesToggle.checked : false;
+        await this.updateVoiceResponses(voiceResponsesEnabled);
+        await this.syncSelectedVoiceToServer();
     }
 
     async loadBackgroundEnforcement() {

@@ -278,12 +278,21 @@ export class TestServer {
     if (this.activeCompositeKey === null) {
       this.activeCompositeKey = key;
     } else {
-      // If the current active is a default session and this is a real session, upgrade
       const currentActive = this.sessions.get(this.activeCompositeKey);
-      if (currentActive && currentActive.sessionId === 'default') {
-        const parsed = JSON.parse(key) as [string, string];
-        if (parsed[0] !== 'default') {
+      const parsed = JSON.parse(key) as [string, string];
+      const newSessionId = parsed[0];
+
+      if (currentActive && currentActive.sessionId === 'default' && newSessionId !== 'default') {
+        // If the current active is a default session and this is a real session, upgrade
+        this.activeCompositeKey = key;
+      } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
+        // Different session_id — check if old session is stale (restart vs concurrent)
+        const staleness = Date.now() - currentActive.lastActivity.getTime();
+        const STALE_THRESHOLD_MS = 5000;
+        if (staleness > STALE_THRESHOLD_MS) {
           this.activeCompositeKey = key;
+          this.voicePreferences.voiceResponsesEnabled = false;
+          this.voicePreferences.voiceInputActive = false;
         }
       }
     }
