@@ -548,11 +548,11 @@ class MessengerClient {
             });
         }
 
-        // Test TTS button — triggers server-side TTS
+        // Test TTS button — triggers server-side TTS without side effects
         if (this.testTTSBtn) {
             this.testTTSBtn.addEventListener('click', async () => {
                 try {
-                    await fetch(`${this.baseUrl}/api/speak`, {
+                    await fetch(`${this.baseUrl}/api/test-voice`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ text: 'This is Voice Mode for Claude Code. How can I help you today?' })

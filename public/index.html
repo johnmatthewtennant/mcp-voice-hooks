@@ -296,29 +296,6 @@
             padding: 16px 20px;
         }
 
-        /* Recognition Mode Controls */
-        .recognition-mode-controls {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 12px;
-            padding: 8px;
-            background: #F8F9FA;
-            border-radius: 8px;
-        }
-
-        .recognition-mode-controls label {
-            font-size: 14px;
-            color: #666;
-        }
-
-        .recognition-mode-controls select {
-            padding: 4px 8px;
-            border: 1px solid #DDD;
-            border-radius: 4px;
-            font-size: 13px;
-        }
-
         /* Text Input Container */
         .input-container {
             display: flex;
@@ -872,6 +849,13 @@
                 <div class="settings-dropdown" id="settingsContent">
                     <div class="tts-controls" id="voiceOptions">
                         <div class="tts-control">
+                            <label for="recognitionModeSelect">Recognition:</label>
+                            <select id="recognitionModeSelect">
+                                <option value="server">Server Recognition</option>
+                                <option value="browser">Browser Recognition</option>
+                            </select>
+                        </div>
+                        <div class="tts-control">
                             <label for="speechRate">Speaking Rate:</label>
                             <input type="range" id="speechRate" min="0.5" max="5" step="0.1" value="1">
                             <input type="number" id="speechRateInput" min="0.5" max="5" step="0.1" value="1">
@@ -926,15 +910,6 @@
 
             <!-- Input Section -->
             <div class="input-section">
-                <!-- Recognition Mode Controls -->
-                <div class="recognition-mode-controls">
-                    <label for="recognitionModeSelect">Recognition:</label>
-                    <select id="recognitionModeSelect">
-                        <option value="server">Server Recognition</option>
-                        <option value="browser">Browser Recognition</option>
-                    </select>
-                </div>
-
                 <!-- Text Input with Microphone -->
                 <div class="input-container">
                     <textarea

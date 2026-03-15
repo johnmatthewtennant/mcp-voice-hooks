@@ -1094,6 +1094,19 @@ wss.on('connection', (ws: WebSocket, request: http.IncomingMessage) => {
   const url = new URL(request.url!, `http://${request.headers.host}`);
   const sessionKey = url.searchParams.get('session') || null;
 
+  // Only allow one WebSocket audio client at a time.
+  // Close any existing connections before accepting the new one.
+  for (const existing of wsAudioClients) {
+    debugLog(`[WS] Closing existing audio client (new connection replacing it)`);
+    if (existing.pingTimer) clearInterval(existing.pingTimer);
+    if (existing.recognizer) {
+      existing.recognizer.kill();
+      existing.recognizer = null;
+    }
+    existing.ws.close(1000, 'Replaced by new connection');
+    wsAudioClients.delete(existing);
+  }
+
   const client: WsAudioClient = {
     ws,
     sessionKey,
@@ -1518,6 +1531,23 @@ app.post('/api/speak', async (req: Request, res: Response) => {
       error: 'Failed to speak text',
       details: error instanceof Error ? error.message : String(error)
     });
+  }
+});
+
+// Test voice — TTS only, no side effects (no utterance marking, no conversation history)
+app.post('/api/test-voice', async (req: Request, res: Response) => {
+  const { text } = req.body;
+  if (!text || !text.trim()) {
+    res.status(400).json({ error: 'Text is required' });
+    return;
+  }
+  try {
+    notifyTTSClients(text);
+    await enqueueTts(text, voicePreferences.speechRate);
+    res.json({ success: true });
+  } catch (error) {
+    debugLog(`[TestVoice] Failed: ${error}`);
+    res.status(500).json({ error: 'Failed to test voice' });
   }
 });
 
