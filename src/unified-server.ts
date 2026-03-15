@@ -44,6 +44,23 @@ interface TtsQueueItem {
 const ttsQueue: TtsQueueItem[] = [];
 let ttsPlaying = false;
 let ttsCurrentProcess: ChildProcess | null = null;
+// Track pending TTS ack promises — resolved when browser confirms playback complete
+const pendingTtsAcks = new Map<string, () => void>();
+const TTS_ACK_TIMEOUT_MS = 30_000; // Give up waiting after 30s
+
+function waitForTtsAck(audioId: string): Promise<void> {
+  return new Promise((resolve) => {
+    pendingTtsAcks.set(audioId, resolve);
+    // Timeout fallback — don't block forever if ack never arrives
+    setTimeout(() => {
+      if (pendingTtsAcks.has(audioId)) {
+        pendingTtsAcks.delete(audioId);
+        debugLog(`[TTS] Ack timeout for audioId=${audioId}, proceeding`);
+        resolve();
+      }
+    }, TTS_ACK_TIMEOUT_MS);
+  });
+}
 
 async function processTtsQueue() {
   if (ttsPlaying || ttsQueue.length === 0) return;
@@ -57,6 +74,9 @@ async function processTtsQueue() {
     if (wsClient && wsClient.ws.readyState === WebSocket.OPEN) {
       serverAudioState.setTtsActive(true);
       await streamTtsOverWs(wsClient, filePath, audioId, 'tts');
+      // Wait for browser to confirm playback is complete (tts-ack)
+      // before clearing ttsActive — streaming finishes faster than playback
+      await waitForTtsAck(audioId);
       serverAudioState.setTtsActive(false);
     } else {
       debugLog(`[TTS] No WebSocket client found for session — skipping audio delivery (text already sent via SSE)`);
@@ -1364,9 +1384,15 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       }
       break;
 
-    case 'tts-ack':
+    case 'tts-ack': {
       debugLog(`[WS] Received tts-ack for audioId=${msg.audioId}`);
+      const resolver = pendingTtsAcks.get(msg.audioId as string);
+      if (resolver) {
+        resolver();
+        pendingTtsAcks.delete(msg.audioId as string);
+      }
       break;
+    }
 
     case 'ping':
       client.ws.send(JSON.stringify({ type: 'pong' }));

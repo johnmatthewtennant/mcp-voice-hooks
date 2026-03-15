@@ -1099,13 +1099,9 @@ class MessengerClient {
                 this.audioPlayer.finishPlayback();
                 if (!isSfx) {
                     this.voiceState.setTtsActive(false);
-                    // Send tts-ack to server
-                    if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
-                        this.audioWs.send(JSON.stringify({ type: 'tts-ack', audioId: msg.audioId }));
-                    }
-                    // Un-mute mic audio streaming after TTS playback finishes
-                    // Wait for remaining scheduled audio to finish
-                    this._scheduleUnmute();
+                    // Wait for actual audio playback to finish, then ack and unmute
+                    // (streaming finishes faster than playback)
+                    this._waitForPlaybackThenAck(msg.audioId);
                 }
                 break;
             }
@@ -1131,10 +1127,15 @@ class MessengerClient {
         this._micMuted = mute;
     }
 
-    _scheduleUnmute() {
-        // Check periodically if audio player has finished all scheduled playback
+    _waitForPlaybackThenAck(audioId) {
+        // Poll until AudioPlayer finishes all scheduled playback, then:
+        // 1. Send tts-ack to server (so it knows playback is truly done)
+        // 2. Unmute mic
         const checkDone = () => {
             if (!this.audioPlayer.isPlaying()) {
+                if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
+                    this.audioWs.send(JSON.stringify({ type: 'tts-ack', audioId }));
+                }
                 this._muteAudioCapture(false);
             } else {
                 setTimeout(checkDone, 100);
