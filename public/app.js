@@ -132,11 +132,6 @@ class MessengerClient {
         // TTS state
         this.speechRate = 1.0;
 
-        // Audio playback queue (for server-rendered system voice)
-        this.audioQueue = [];
-        this.audioPlaying = false;
-        this.currentAudio = null;
-
         // WebSocket audio capture state
         this.audioWs = null;
         this.audioContext = null;
@@ -189,16 +184,7 @@ class MessengerClient {
                     // This handles both initial connect and reconnect after server restart
                     console.log('[SSE] Connected to server, syncing voice state');
                     this.syncVoiceStateToServer();
-                } else if (data.type === 'tts-audio' && data.audioUrl) {
-                    // Server-rendered audio ready — queue for playback (SSE fallback)
-                    // Skip if WS is connected (audio arrives as binary frames)
-                    if (!this.wsConnected) {
-                        this.audioQueue.push(data.audioUrl);
-                        this.processAudioQueue();
-                    }
                 } else if (data.type === 'tts-clear') {
-                    this.clearAudioQueue();
-                    // Also clear WS audio player
                     this.audioPlayer.clear();
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
@@ -403,43 +389,6 @@ class MessengerClient {
         } catch (error) {
             console.error('Failed to switch session:', error);
         }
-    }
-
-    processAudioQueue() {
-        if (this.audioPlaying || this.audioQueue.length === 0) return;
-        this.audioPlaying = true;
-        const url = this.audioQueue.shift();
-        const audio = new Audio(url);
-        this.currentAudio = audio;
-
-        audio.play().catch((err) => {
-            console.warn('Audio playback failed (autoplay restriction?):', err);
-            this.audioPlaying = false;
-            this.currentAudio = null;
-            this.processAudioQueue();
-        });
-
-        audio.addEventListener('ended', () => {
-            this.audioPlaying = false;
-            this.currentAudio = null;
-            this.processAudioQueue();
-        });
-
-        audio.addEventListener('error', (e) => {
-            console.warn('Audio playback error:', e);
-            this.audioPlaying = false;
-            this.currentAudio = null;
-            this.processAudioQueue();
-        });
-    }
-
-    clearAudioQueue() {
-        this.audioQueue = [];
-        if (this.currentAudio) {
-            this.currentAudio.pause();
-            this.currentAudio = null;
-        }
-        this.audioPlaying = false;
     }
 
     loadPreferences() {
@@ -938,8 +887,6 @@ class MessengerClient {
     }
 
     async syncVoiceStateToServer() {
-        // Reset audio playback state — old audio from previous server is invalid
-        this.clearAudioQueue();
         // Re-send current browser voice state to the server after a session reset
         await this.updateVoiceInputState(this.isListening);
         // Voice responses are tied to listening state

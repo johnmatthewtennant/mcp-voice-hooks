@@ -72,8 +72,7 @@ async function processTtsQueue() {
     if (wsClient && wsClient.ws.readyState === WebSocket.OPEN) {
       await streamTtsOverWs(wsClient, filePath, audioId);
     } else {
-      // Fall back to SSE + HTTP WAV file fetch
-      notifyTTSAudio(`/api/tts-audio/${audioId}`, item.sessionKey);
+      debugLog(`[TTS] No WebSocket client found for session — skipping audio delivery (text already sent via SSE)`);
     }
     item.resolve(audioId);
   } catch (error) {
@@ -225,9 +224,6 @@ let voicePreferences = {
   speechRate: 200 as number  // words per minute for say -o rendering
 };
 
-// Rendered TTS audio files - maps audioId to file info
-const renderedAudioFiles = new Map<string, { filePath: string; createdAt: number }>();
-
 // Render TTS to WAV file using say -o (uncompressed PCM for best quality)
 function renderTtsToFile(text: string, rate: number): Promise<{ filePath: string; audioId: string }> {
   const audioId = randomUUID();
@@ -242,26 +238,12 @@ function renderTtsToFile(text: string, rate: number): Promise<{ filePath: string
         fs.unlink(filePath, () => {});
         reject(error);
       } else {
-        renderedAudioFiles.set(audioId, { filePath, createdAt: Date.now() });
         debugLog(`[TTS Render] Rendered to ${filePath} (rate: ${clampedRate})`);
         resolve({ filePath, audioId });
       }
     });
   });
 }
-
-// Periodic cleanup of old rendered audio files (every 5 minutes, delete files older than 10 minutes)
-setInterval(() => {
-  const now = Date.now();
-  const maxAge = 10 * 60 * 1000; // 10 minutes
-  for (const [id, info] of renderedAudioFiles) {
-    if (now - info.createdAt > maxAge) {
-      fs.unlink(info.filePath, () => {});
-      renderedAudioFiles.delete(id);
-      debugLog(`[TTS Cleanup] Deleted expired audio file: ${info.filePath}`);
-    }
-  }
-}, 5 * 60 * 1000);
 
 // Background voice enforcement: when enabled, inactive sessions get
 // voiceResponsesEnabled=true and voiceInputActive=false in hook responses,
@@ -1023,17 +1005,6 @@ function notifyTTSClients(text: string) {
   });
 }
 
-// Helper function to notify TTS clients with rendered audio URL
-function notifyTTSAudio(audioUrl: string, sessionKey: string | null) {
-  const targetKey = sessionKey || activeCompositeKey;
-  const message = JSON.stringify({ type: 'tts-audio', audioUrl, sessionKey: targetKey });
-  ttsClients.forEach((viewingKey, client) => {
-    if (viewingKey === null || viewingKey === targetKey) {
-      client.write(`data: ${message}\n\n`);
-    }
-  });
-}
-
 // Helper function to notify TTS clients to clear their audio playback queue
 function notifyTTSClear() {
   const message = JSON.stringify({ type: 'tts-clear' });
@@ -1549,27 +1520,6 @@ app.post('/api/test-voice', async (req: Request, res: Response) => {
     debugLog(`[TestVoice] Failed: ${error}`);
     res.status(500).json({ error: 'Failed to test voice' });
   }
-});
-
-// Serve rendered TTS audio files
-app.get('/api/tts-audio/:id', (req: Request, res: Response) => {
-  const { id } = req.params;
-  const fileInfo = renderedAudioFiles.get(id);
-
-  if (!fileInfo) {
-    res.status(404).json({ error: 'Audio file not found or expired' });
-    return;
-  }
-
-  res.set('Content-Type', 'audio/wav');
-  res.sendFile(fileInfo.filePath, (err) => {
-    if (err) {
-      debugLog(`[TTS Audio] Failed to send audio file: ${err}`);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to send audio file' });
-      }
-    }
-  });
 });
 
 // Set selected voice preference (browser syncs this on voice dropdown change)
