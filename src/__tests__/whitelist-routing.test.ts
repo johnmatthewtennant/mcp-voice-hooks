@@ -176,31 +176,32 @@ describe('Pre-speak whitelist and multi-session routing', () => {
     });
 
     it('pre-speak for inactive session approves and stores in history', async () => {
-      // Set session-A as active
+      // Set main agent as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: 'session-A' }),
       });
 
-      // session-B tries to speak
+      // subagent tries to speak
       const res = await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session_id: 'session-B',
-          tool_input: { text: 'I am session B' },
+          session_id: 'session-A',
+          agent_id: 'subagent-B',
+          tool_input: { text: 'I am subagent B' },
         }),
       });
       const data = await res.json() as any;
       expect(data.decision).toBe('approve');
 
-      // Verify text was stored in session-B's conversation history
-      const sessionBKey = JSON.stringify(['session-B', 'main']);
+      // Verify text was stored in subagent-B's conversation history
+      const sessionBKey = JSON.stringify(['session-A', 'subagent-B']);
       const sessionB = server.sessions.get(sessionBKey);
       expect(sessionB).toBeDefined();
       const assistantMessages = sessionB!.queue.messages.filter(m => m.role === 'assistant');
-      expect(assistantMessages.some(m => m.text === 'I am session B')).toBe(true);
+      expect(assistantMessages.some(m => m.text === 'I am subagent B')).toBe(true);
     });
   });
 

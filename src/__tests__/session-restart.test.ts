@@ -12,7 +12,7 @@ describe('Session restart detection', () => {
     await server.stop();
   });
 
-  it('resets voice state when a new Claude session_id is detected and old session is stale', async () => {
+  it('resets voice state when a new Claude session_id is detected', async () => {
     // Simulate first Claude session registering
     await fetch(`${server.url}/api/hooks/post-tool`, {
       method: 'POST',
@@ -36,11 +36,6 @@ describe('Session restart detection', () => {
     const prefsBefore = server.getVoicePreferences();
     expect(prefsBefore.voiceInputActive).toBe(true);
     expect(prefsBefore.voiceResponsesEnabled).toBe(true);
-
-    // Simulate old session going stale (Claude exited)
-    const oldKey = JSON.stringify(['session-old', 'main']);
-    const oldSession = server.sessions.get(oldKey)!;
-    oldSession.lastActivity = new Date(Date.now() - 10000); // 10 seconds ago
 
     // Claude restarts — new session_id arrives via hook
     await fetch(`${server.url}/api/hooks/post-tool`, {
@@ -70,10 +65,6 @@ describe('Session restart detection', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true }),
     });
-
-    // Simulate old session going stale (Claude exited)
-    const oldKey = JSON.stringify(['session-old', 'main']);
-    server.sessions.get(oldKey)!.lastActivity = new Date(Date.now() - 10000);
 
     // Claude restarts with new session
     await fetch(`${server.url}/api/hooks/post-tool`, {
@@ -149,7 +140,7 @@ describe('Session restart detection', () => {
     expect(prefs.voiceResponsesEnabled).toBe(true);
   });
 
-  it('does not reset when old session is still active (concurrent sessions)', async () => {
+  it('switches active to new session_id even if old session was recently active', async () => {
     // Register session A
     await fetch(`${server.url}/api/hooks/post-tool`, {
       method: 'POST',
@@ -163,26 +154,19 @@ describe('Session restart detection', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active: true }),
     });
-    await fetch(`${server.url}/api/voice-responses`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
-    });
 
-    // Session B arrives immediately (concurrent, NOT a restart)
+    // Session B arrives immediately — should still switch active and reset voice
     await fetch(`${server.url}/api/hooks/post-tool`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: 'session-B' }),
     });
 
-    // Active session should NOT change
-    expect(server.activeCompositeKey).toBe(JSON.stringify(['session-A', 'main']));
+    expect(server.activeCompositeKey).toBe(JSON.stringify(['session-B', 'main']));
 
-    // Voice state should NOT be reset
     const prefs = server.getVoicePreferences();
-    expect(prefs.voiceInputActive).toBe(true);
-    expect(prefs.voiceResponsesEnabled).toBe(true);
+    expect(prefs.voiceInputActive).toBe(false);
+    expect(prefs.voiceResponsesEnabled).toBe(false);
   });
 
   it('does not reset for subagent hooks within the same session', async () => {

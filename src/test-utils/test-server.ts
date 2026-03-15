@@ -286,14 +286,10 @@ export class TestServer {
         // If the current active is a default session and this is a real session, upgrade
         this.activeCompositeKey = key;
       } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
-        // Different session_id — check if old session is stale (restart vs concurrent)
-        const staleness = Date.now() - currentActive.lastActivity.getTime();
-        const STALE_THRESHOLD_MS = 5000;
-        if (staleness > STALE_THRESHOLD_MS) {
-          this.activeCompositeKey = key;
-          this.voicePreferences.voiceResponsesEnabled = false;
-          this.voicePreferences.voiceInputActive = false;
-        }
+        // Different session_id means new Claude instance — always switch active
+        this.activeCompositeKey = key;
+        this.voicePreferences.voiceResponsesEnabled = false;
+        this.voicePreferences.voiceInputActive = false;
       }
     }
   }

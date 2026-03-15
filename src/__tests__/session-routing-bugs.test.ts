@@ -74,7 +74,7 @@ describe('Session routing bug fixes', () => {
   });
 
   describe('Bug 2: Conversation history should not mix between sessions', () => {
-    it('two sessions have completely separate conversation histories', async () => {
+    it('main agent and subagent have completely separate conversation histories', async () => {
       // Enable voice responses
       await fetch(`${server.url}/api/voice-responses`, {
         method: 'POST',
@@ -82,14 +82,14 @@ describe('Session routing bug fixes', () => {
         body: JSON.stringify({ enabled: true }),
       });
 
-      // Register session-A as active
+      // Register main agent as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: 'session-A' }),
       });
 
-      // Add utterance to session-A (via browser, goes to active session)
+      // Add utterance to main agent (via browser, goes to active session)
       await fetch(`${server.url}/api/potential-utterances`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -103,7 +103,7 @@ describe('Session routing bug fixes', () => {
         if (u.status === 'pending') sessionA.queue.markDelivered(u.id);
       });
 
-      // Session-A speaks (whitelist + speak)
+      // Main agent speaks (whitelist + speak)
       await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -118,25 +118,26 @@ describe('Session routing bug fixes', () => {
         body: JSON.stringify({ text: 'Response from A' }),
       });
 
-      // Session-B speaks (inactive, stored in B's history)
+      // Subagent speaks (inactive, stored in subagent's history)
       await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session_id: 'session-B',
+          session_id: 'session-A',
+          agent_id: 'subagent-B',
           tool_input: { text: 'Response from B' },
         }),
       });
 
-      // Verify session-A has its messages (user + assistant)
+      // Verify main agent has its messages (user + assistant)
       const aMessages = sessionA.queue.messages;
       expect(aMessages.some(m => m.text === 'Message for A' && m.role === 'user')).toBe(true);
       expect(aMessages.some(m => m.text === 'Response from A' && m.role === 'assistant')).toBe(true);
       // B's message should NOT be in A's history
       expect(aMessages.some(m => m.text === 'Response from B')).toBe(false);
 
-      // Verify session-B has only its own message
-      const keyB = JSON.stringify(['session-B', 'main']);
+      // Verify subagent has only its own message
+      const keyB = JSON.stringify(['session-A', 'subagent-B']);
       const sessionB = server.sessions.get(keyB);
       expect(sessionB).toBeDefined();
       const bMessages = sessionB!.queue.messages;
@@ -154,21 +155,21 @@ describe('Session routing bug fixes', () => {
         body: JSON.stringify({ enabled: true }),
       });
 
-      // Register session-A as active
+      // Register main agent as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: 'session-A' }),
       });
 
-      // Register session-B (inactive)
+      // Register subagent (inactive, same session_id)
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: 'session-B' }),
+        body: JSON.stringify({ session_id: 'session-A', agent_id: 'subagent-B' }),
       });
 
-      // Session-A pre-speak whitelists text
+      // Main agent pre-speak whitelists text
       await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -178,19 +179,19 @@ describe('Session routing bug fixes', () => {
         }),
       });
 
-      // Speak endpoint should store in session-A (the whitelisted session)
+      // Speak endpoint should store in main agent session (the whitelisted session)
       await fetch(`${server.url}/api/speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: 'Hello from active' }),
       });
 
-      // Verify message ended up in session-A, not session-B
+      // Verify message ended up in main agent, not subagent
       const keyA = JSON.stringify(['session-A', 'main']);
       const sessionA = server.sessions.get(keyA);
       expect(sessionA!.queue.messages.some(m => m.text === 'Hello from active' && m.role === 'assistant')).toBe(true);
 
-      const keyB = JSON.stringify(['session-B', 'main']);
+      const keyB = JSON.stringify(['session-A', 'subagent-B']);
       const sessionB = server.sessions.get(keyB);
       expect(sessionB!.queue.messages.some(m => m.text === 'Hello from active')).toBe(false);
     });

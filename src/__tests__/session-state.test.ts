@@ -108,27 +108,28 @@ describe('Per-session state and session lifecycle', () => {
         body: JSON.stringify({ enabled: true }),
       });
 
-      // Set session-A as active
+      // Set main agent as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: 'session-A' }),
       });
 
-      // Session-B tries to speak (inactive, approved but no TTS)
+      // Subagent tries to speak (inactive, approved but no TTS)
       const res = await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session_id: 'session-B',
+          session_id: 'session-A',
+          agent_id: 'subagent-B',
           tool_input: { text: 'I am B' },
         }),
       });
       const data = await res.json() as any;
       expect(data.decision).toBe('approve');
 
-      // Check the message was stored in session-B's conversation history
-      const sessionBKey = JSON.stringify(['session-B', 'main']);
+      // Check the message was stored in subagent-B's conversation history
+      const sessionBKey = JSON.stringify(['session-A', 'subagent-B']);
       const sessionB = server.sessions.get(sessionBKey);
       expect(sessionB).toBeDefined();
       const assistantMsgs = sessionB!.queue.messages.filter(m => m.role === 'assistant');
@@ -138,7 +139,7 @@ describe('Per-session state and session lifecycle', () => {
 
   describe('Inactive session voice enforcement', () => {
     it('inactive session stop blocks when unspoken after tool use', async () => {
-      // Set session-A as active
+      // Set main agent as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -152,18 +153,18 @@ describe('Per-session state and session lifecycle', () => {
         body: JSON.stringify({ enabled: true }),
       });
 
-      // Session-B uses a tool (creates session, sets lastToolUseTimestamp)
+      // Subagent uses a tool (creates session, sets lastToolUseTimestamp)
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: 'session-B' }),
+        body: JSON.stringify({ session_id: 'session-A', agent_id: 'subagent-B' }),
       });
 
-      // Session-B tries to stop — should block (hasn't spoken since tool use)
+      // Subagent tries to stop — should block (hasn't spoken since tool use)
       const res = await fetch(`${server.url}/api/hooks/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: 'session-B' }),
+        body: JSON.stringify({ session_id: 'session-A', agent_id: 'subagent-B' }),
       });
       const data = await res.json() as any;
       expect(data.decision).toBe('block');
@@ -171,7 +172,7 @@ describe('Per-session state and session lifecycle', () => {
     });
 
     it('inactive session pre-speak satisfies speak requirement for stop', async () => {
-      // Set session-A as active
+      // Set main agent as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -185,30 +186,31 @@ describe('Per-session state and session lifecycle', () => {
         body: JSON.stringify({ enabled: true }),
       });
 
-      // Session-B uses a tool
+      // Subagent uses a tool
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: 'session-B' }),
+        body: JSON.stringify({ session_id: 'session-A', agent_id: 'subagent-B' }),
       });
 
-      // Session-B speaks (approved but no TTS, updates lastSpeakTimestamp)
+      // Subagent speaks (approved but no TTS, updates lastSpeakTimestamp)
       const speakRes = await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          session_id: 'session-B',
+          session_id: 'session-A',
+          agent_id: 'subagent-B',
           tool_input: { text: 'My response' },
         }),
       });
       const speakData = await speakRes.json() as any;
       expect(speakData.decision).toBe('approve'); // Approved (no TTS for inactive)
 
-      // Session-B tries to stop — should now approve
+      // Subagent tries to stop — should now approve
       const stopRes = await fetch(`${server.url}/api/hooks/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: 'session-B' }),
+        body: JSON.stringify({ session_id: 'session-A', agent_id: 'subagent-B' }),
       });
       const stopData = await stopRes.json() as any;
       expect(stopData.decision).toBe('approve');

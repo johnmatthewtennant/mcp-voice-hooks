@@ -814,21 +814,16 @@ function registerIfFirst(key: string): void {
       activeCompositeKey = key;
       debugLog(`[Session] Active upgraded from default → ${key}`);
     } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
-      // Different session_id from the active one. This is either:
-      // 1. A restart: old Claude exited, new one started (old session is stale)
-      // 2. Concurrent: two Claude instances running simultaneously
-      // Distinguish by checking if the old session is stale (no hook activity recently).
-      const staleness = Date.now() - currentActive.lastActivity.getTime();
-      const STALE_THRESHOLD_MS = 5000; // 5 seconds
-      if (staleness > STALE_THRESHOLD_MS) {
-        const oldKey = activeCompositeKey;
-        activeCompositeKey = key;
-        debugLog(`[Session] New Claude session detected (old stale for ${staleness}ms): ${oldKey} → ${key}`);
-        voicePreferences.voiceResponsesEnabled = false;
-        voicePreferences.voiceInputActive = false;
-        debugLog(`[Session] Voice state reset for new session`);
-        notifySessionReset();
-      }
+      // Different session_id means a new Claude instance (restart or new project).
+      // Always switch active to the new session and reset voice state.
+      // The browser will re-sync via the session-reset SSE event.
+      const oldKey = activeCompositeKey;
+      activeCompositeKey = key;
+      debugLog(`[Session] New Claude session detected: ${oldKey} → ${key}`);
+      voicePreferences.voiceResponsesEnabled = false;
+      voicePreferences.voiceInputActive = false;
+      debugLog(`[Session] Voice state reset for new session`);
+      notifySessionReset();
     }
   }
 }
