@@ -8,7 +8,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { execFile, type ChildProcess } from 'child_process';
+import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
@@ -252,7 +252,7 @@ function findFfmpeg(): string {
   const candidates = ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', 'ffmpeg'];
   for (const candidate of candidates) {
     try {
-      require('child_process').execFileSync(candidate, ['-version'], { stdio: 'ignore' });
+      execFileSync(candidate, ['-version'], { stdio: 'ignore' });
       return candidate;
     } catch { /* try next */ }
   }
@@ -1818,8 +1818,9 @@ httpServer.listen(HTTP_PORT, async () => {
   // Pre-render sound effects (chime, pulses) for server-side audio
   try {
     await generateSounds();
+    fs.appendFileSync('/tmp/mcp-voice-hooks.log', `  [Sounds] Generated: chime=${sounds.chime} listening=${sounds.listeningPulse} processing=${sounds.processingPulse}\n`);
   } catch (e) {
-    console.warn('[Sounds] Failed to pre-render sounds (ffmpeg may not be installed):', e);
+    fs.appendFileSync('/tmp/mcp-voice-hooks.log', `  [Sounds] FAILED: ${e}\n`);
   }
 
   // Log startup info with git hash and timestamp to file for debugging
