@@ -556,15 +556,16 @@ If Silero VAD adds too much bundle size or complexity:
 - [ ] Spawn `speech-recognizer` as child process
 - [ ] Pipe incoming WebSocket binary frames to child process stdin
 - [ ] Parse JSON lines from stdout → emit `transcript-interim` and `transcript-final` over WS
-- [ ] On `transcript-final`: create utterance in queue (same as current `POST /api/potential-utterances`)
+- [ ] On `transcript-final`: create utterance directly in server queue (no browser round-trip)
 - [ ] Handle process lifecycle: start on first audio, restart on crash, stop on WS disconnect
 - [ ] Add `--no-transcribe` server flag to disable (for environments without speech-recognizer binary)
 
 **Client tasks**:
-- [ ] Handle `transcript-interim` messages → display in interim text area
-- [ ] Handle `transcript-final` messages → add to conversation as user message
+- [ ] Handle `transcript-interim` messages → display in interim text area (display only)
+- [ ] Handle `transcript-final` messages → display in conversation history (display only — server already created the utterance)
 - [ ] Add toggle in settings: "Server Recognition" vs "Browser Recognition"
 - [ ] When server recognition active, don't start Web Speech API
+- [ ] Remove trigger word mode — no longer needed with server-side recognition creating utterances directly
 
 **Verification**:
 - [ ] Speak into mic → see interim transcripts updating in UI → see final transcript appear as message
@@ -657,7 +658,7 @@ If Silero VAD adds too much bundle size or complexity:
 
 10. **Security**: The WebSocket endpoint has no authentication. Low risk on localhost, but HTTPS remote access (already a feature) would allow any LAN device to connect. Mitigation: Add a simple token/cookie check for remote connections.
 
-11. **Trigger word mode**: With server-side recognition, the server produces `transcript-final` events that would need to be buffered until the trigger word is detected. This requires either: (a) moving trigger word logic to the server, or (b) having the client intercept `transcript-final` messages and hold them. **Design this before starting Phase 2** as it affects the transcript event flow architecture.
+11. **~~Trigger word mode~~**: RESOLVED — Trigger word mode is removed. With server-side recognition, the server creates utterances directly from `transcript-final` events. The browser is display-only for transcripts. No trigger word logic needed on either side.
 
 ### Resolved Decisions (from Codex review)
 

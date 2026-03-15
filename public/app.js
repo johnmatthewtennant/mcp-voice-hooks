@@ -1252,13 +1252,13 @@ class MessengerClient {
 
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${location.host}/ws/audio`;
-        this.debugLog('[WS] Connecting to', wsUrl);
+        console.log('[WS] Connecting to', wsUrl);
 
         this.audioWs = new WebSocket(wsUrl);
         this.audioWs.binaryType = 'arraybuffer';
 
         this.audioWs.onopen = () => {
-            this.debugLog('[WS] Connected');
+            console.log('[WS] Connected');
             this.wsConnected = true;
             this.wsReconnectDelay = 1000; // Reset backoff on successful connect
             // Start audio capture now that the WS connection is ready
@@ -1282,7 +1282,7 @@ class MessengerClient {
         };
 
         this.audioWs.onclose = () => {
-            this.debugLog('[WS] Disconnected');
+            console.log('[WS] Disconnected');
             this.wsConnected = false;
             this.audioWs = null;
             // Reset TTS playback state and unmute mic on disconnect
@@ -1302,7 +1302,7 @@ class MessengerClient {
     handleWsMessage(msg) {
         switch (msg.type) {
             case 'tts-start':
-                this.debugLog('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate);
+                console.log('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate);
                 this.audioPlayer.prepareForPlayback(msg.sampleRate, msg.audioId);
                 // Echo suppression: mute mic audio streaming during TTS playback
                 this._muteAudioCapture(true);
