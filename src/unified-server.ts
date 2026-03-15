@@ -9,6 +9,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { exec, execFile, type ChildProcess } from 'child_process';
+import { EventEmitter } from 'events';
 import { promisify } from 'util';
 import fs from 'fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -23,12 +24,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Constants
-const WAIT_TIMEOUT_SECONDS = 60;
+const WAIT_TIMEOUT_SECONDS = 300; // 5-minute safety net; primary exit is browser disconnect
 const HTTP_PORT = process.env.MCP_VOICE_HOOKS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_PORT) : 5111;
 const HTTPS_PORT = process.env.MCP_VOICE_HOOKS_HTTPS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_HTTPS_PORT) : HTTP_PORT + 1;
 
 // Promisified exec for async/await
 const execAsync = promisify(exec);
+
+// Server-wide event emitter for cross-component signals
+const serverEvents = new EventEmitter();
 
 // Function to play a sound notification
 async function playNotificationSound() {
@@ -563,8 +567,18 @@ async function waitForUtteranceCore(session?: SessionState) {
       await playNotificationSound();
     }
 
-    // Wait 100ms before checking again
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Wait 100ms before checking again, but wake immediately on client disconnect
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(() => {
+        serverEvents.removeListener('allClientsDisconnected', onDisconnect);
+        resolve();
+      }, 100);
+      const onDisconnect = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      serverEvents.once('allClientsDisconnected', onDisconnect);
+    });
   }
 
   // Timeout reached - no utterances found
@@ -572,7 +586,7 @@ async function waitForUtteranceCore(session?: SessionState) {
   return {
     success: true,
     utterances: [],
-    message: `No utterances found after waiting ${secondsToWait} seconds.`,
+    message: `No utterances found after waiting ${Math.round((Date.now() - startTime) / 1000)} seconds.`,
     waitTime: maxWaitMs,
   };
 }
@@ -969,6 +983,7 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
         voicePreferences.voiceInputActive = false;
         voicePreferences.voiceResponsesEnabled = false;
       }
+      serverEvents.emit('allClientsDisconnected');
     } else {
       debugLog(`[SSE] Client disconnected: session=${disconnectedSessionKey || 'active'}`);
     }
