@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import { execFile, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import fs from 'fs';
+import os from 'os';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
@@ -227,6 +228,95 @@ function renderTtsToFile(text: string, rate: number): Promise<{ filePath: string
     });
   });
 }
+
+// Pre-rendered sound effects — generated at startup, streamed on demand
+interface SoundLibrary {
+  chime: string | null;           // path to chime WAV
+  listeningPulse: string | null;  // path to listening pulse WAV
+  processingPulse: string | null; // path to processing pulse WAV
+}
+
+const sounds: SoundLibrary = {
+  chime: null,
+  listeningPulse: null,
+  processingPulse: null,
+};
+
+let soundsDir: string | null = null;
+
+// Resolve ffmpeg binary — check explicit paths for non-interactive shells
+function findFfmpeg(): string {
+  const candidates = ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', 'ffmpeg'];
+  for (const candidate of candidates) {
+    try {
+      require('child_process').execFileSync(candidate, ['-version'], { stdio: 'ignore' });
+      return candidate;
+    } catch { /* try next */ }
+  }
+  throw new Error('ffmpeg not found');
+}
+
+async function generateSounds(): Promise<void> {
+  const ffmpegPath = findFfmpeg();
+
+  // Create per-process temp directory (not shared, avoids symlink/tampering risks)
+  soundsDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mcp-voice-hooks-sounds-'));
+  // Restrict permissions to owner only
+  await fs.promises.chmod(soundsDir, 0o700);
+
+  // All sounds: 22050Hz, mono, 16-bit PCM WAV (matches TTS pipeline)
+  const ffmpegBase = ['-ar', '22050', '-ac', '1', '-sample_fmt', 's16', '-f', 'wav', '-y'];
+
+  // Chime: two-note ascending (880Hz 100ms + 1100Hz 100ms), volume=0.3
+  const chimePath = path.join(soundsDir, 'chime.wav');
+  await renderFfmpeg(ffmpegPath, [
+    '-f', 'lavfi', '-i',
+    'sine=frequency=880:duration=0.1,afade=t=out:st=0.05:d=0.05[a];sine=frequency=1100:duration=0.1,adelay=100|100,afade=t=out:st=0.05:d=0.05[b];[a][b]amix=inputs=2:duration=longest,volume=0.3',
+    ...ffmpegBase, chimePath,
+  ]);
+  sounds.chime = chimePath;
+
+  // Listening pulse: soft warm tone at 220Hz + 440Hz harmonic, 350ms with fade, volume=0.15
+  const listeningPath = path.join(soundsDir, 'listening-pulse.wav');
+  await renderFfmpeg(ffmpegPath, [
+    '-f', 'lavfi', '-i',
+    'sine=frequency=220:duration=0.35,afade=t=in:d=0.04,afade=t=out:st=0.1:d=0.25[a];sine=frequency=440:duration=0.3,volume=0.3,afade=t=in:d=0.04,afade=t=out:st=0.08:d=0.22[b];[a][b]amix=inputs=2:duration=longest,volume=0.15',
+    ...ffmpegBase, listeningPath,
+  ]);
+  sounds.listeningPulse = listeningPath;
+
+  // Processing pulse: low thump at 90Hz, 200ms with quick attack, volume=0.1
+  const processingPath = path.join(soundsDir, 'processing-pulse.wav');
+  await renderFfmpeg(ffmpegPath, [
+    '-f', 'lavfi', '-i',
+    'sine=frequency=90:duration=0.2,afade=t=in:d=0.03,afade=t=out:st=0.05:d=0.15,volume=0.1',
+    ...ffmpegBase, processingPath,
+  ]);
+  sounds.processingPulse = processingPath;
+
+  debugLog(`[Sounds] Pre-rendered chime, listening pulse, processing pulse to ${soundsDir}`);
+}
+
+function renderFfmpeg(ffmpegPath: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegPath, args, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+// Cleanup sounds directory on shutdown
+function cleanupSounds(): void {
+  if (soundsDir) {
+    fs.rmSync(soundsDir, { recursive: true, force: true });
+    soundsDir = null;
+  }
+}
+// Register cleanup on process exit
+process.on('exit', cleanupSounds);
+process.on('SIGINT', () => { cleanupSounds(); process.exit(0); });
+process.on('SIGTERM', () => { cleanupSounds(); process.exit(0); });
 
 // Background voice enforcement: when enabled, inactive sessions get
 // voiceActive=true in hook responses for inactive sessions,
@@ -1532,6 +1622,13 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
 
 httpServer.listen(HTTP_PORT, async () => {
   if (eaddrinuseDetected) return; // defensive guard
+
+  // Pre-render sound effects (chime, pulses) for server-side audio
+  try {
+    await generateSounds();
+  } catch (e) {
+    console.warn('[Sounds] Failed to pre-render sounds (ffmpeg may not be installed):', e);
+  }
 
   // Log startup info with git hash and timestamp to file for debugging
   const { execSync } = await import('child_process');
