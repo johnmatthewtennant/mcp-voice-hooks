@@ -16,7 +16,7 @@ Replace both with a **single bidirectional WebSocket**:
 - **Upstream (browser → server)**: Raw microphone audio for server-side speech recognition
 - **Downstream (server → browser)**: Interim transcripts + TTS audio chunks for AudioContext playback
 
-The server runs speech recognition via `swift-transcribe` (Apple's on-device Speech framework on macOS), eliminating browser speech API dependency. The browser plays TTS audio by writing PCM buffers to an AudioContext, which works on iOS Safari once unlocked by a user gesture (the "Start Listening" tap).
+The server runs speech recognition via a standalone Swift binary using Apple's on-device `SpeechTranscriber` API (macOS 26+, Neural Engine), eliminating browser speech API dependency. The browser plays TTS audio by writing PCM buffers to an AudioContext, which works on iOS Safari once unlocked by a user gesture (the "Start Listening" tap).
 
 ---
 
@@ -39,16 +39,16 @@ The server runs speech recognition via `swift-transcribe` (Apple's on-device Spe
 - **SSE client**: Listens on `/api/tts-events` for `speak`, `tts-audio`, `tts-clear`, `session-reset`, `waitStatus` events
 - **UI**: Messenger-style chat with microphone button, voice settings panel
 
-### swift-transcribe (`/Users/jtennant/Development/jtennant-transcriber/`)
+### Speech Recognition (new standalone Swift binary)
 
-- **macOS CLI tool** using Apple's `SpeechAnalyzer` / `SpeechTranscriber` framework (Neural Engine)
-- **Dual-channel capture**: Mic (AVAudioEngine) + system audio (ScreenCaptureKit)
-- **Streaming input**: Accepts `AsyncStream<TimestampedBuffer>` — designed for real-time audio
-- **Result types**: Finalized results (high accuracy) + volatile/partial results (disabled by default but code supports re-enabling via `.volatileResults` flag)
-- **Audio format**: Accepts PCM from mic (typically 48kHz float), converts internally via AVAudioConverter
-- **Output**: Markdown file with speaker-attributed timestamps
-- **Integration options**: File-based IPC, stdout piping, or custom wrapper
-- **Limitation**: CLI-only, no socket/HTTP API. Would need a wrapper or library extraction to integrate with Node.js server.
+- **Fresh standalone Swift CLI** built specifically for voice hooks — no dependency on speech-recognizer or external libraries
+- **Uses Apple's `SpeechTranscriber` / `SpeechAnalyzer` API** (macOS 26+, Neural Engine)
+- **Stdin input**: Reads PCM audio from stdin, produces `AsyncStream<TimestampedBuffer>` internally
+- **JSON output**: Writes JSON lines to stdout — `{"type":"interim","text":"..."}` and `{"type":"final","text":"..."}`
+- **Volatile/interim results**: Enabled via `reportingOptions: [.volatileResults]`
+- **Audio format**: Accepts PCM16 at 16kHz mono from stdin, converts internally via AVAudioConverter if needed
+- **Lifecycle**: One process per WebSocket connection, stays running across utterances
+- **Location**: Built as a Swift package within the voice hooks repo (e.g., `swift/speech-recognizer/`)
 
 ---
 
@@ -139,22 +139,25 @@ httpServer.on('upgrade', (request, socket, head) => {
 
 ### Phase 2: Speech Recognition Pipeline
 
-Create a new module `src/speech-recognition.ts` that wraps `swift-transcribe` integration.
+Create a new module `src/speech-recognition.ts` that wraps `speech-recognizer` integration.
 
-**Option A (Recommended): Spawn swift-transcribe as child process with stdin piping**
+**Standalone Swift binary: `speech-recognizer`**
 
-Since swift-transcribe uses `AsyncStream<TimestampedBuffer>` internally, we need a way to pipe audio from Node.js into it. This requires a small modification to swift-transcribe to accept audio from stdin instead of only from AVAudioEngine:
+A fresh Swift CLI built within the voice hooks repo (`swift/speech-recognizer/`). Uses Apple's `SpeechTranscriber` API (macOS 26+) with Neural Engine for high-quality on-device recognition.
 
-1. Add a `--stdin` flag to swift-transcribe that reads PCM audio from stdin instead of capturing from mic
-2. Add a `--volatile` flag to enable interim/volatile results output to stdout
-3. Output results as JSON lines to stdout: `{"type":"interim","text":"..."}` or `{"type":"final","text":"..."}`
+**Swift package structure**:
+- `Package.swift` — Swift package manifest
+- `Sources/SpeechRecognizer/main.swift` — Entry point, CLI argument parsing
+- `Sources/SpeechRecognizer/StdinAudioSource.swift` — Reads PCM from stdin, produces `AsyncStream<TimestampedBuffer>`
 
-**swift-transcribe modifications needed** (in `/Users/jtennant/Development/jtennant-transcriber/`):
-- Add `StdinAudioSource` that reads PCM from stdin and produces `AsyncStream<TimestampedBuffer>`
-- Add `--stdin` and `--format` CLI flags (sample rate, bit depth, channels)
-- Add `--json` output mode that writes JSON lines to stdout instead of markdown
-- Re-enable volatile results when `--volatile` flag is set
-- Skip ScreenCaptureKit/AVAudioEngine initialization in stdin mode
+**Key implementation details**:
+- Reads PCM16 LE at 16kHz mono from stdin
+- Constructs `AVAudioPCMBuffer` objects with correct `AVAudioFormat` and `frameLength`
+- Computes timestamps from sample count (not wall clock) to avoid network latency skew
+- Uses `SpeechAnalyzer` with `reportingOptions: [.volatileResults]` for interim results
+- Outputs JSON lines to stdout: `{"type":"interim","text":"..."}` and `{"type":"final","text":"..."}`
+- Serializes stdout writes to avoid concurrent output corruption
+- Gracefully finishes `AsyncStream` on stdin EOF to flush remaining results
 
 **Node.js side**:
 
@@ -162,13 +165,8 @@ Since swift-transcribe uses `AsyncStream<TimestampedBuffer>` internally, we need
 class SpeechRecognizer {
   private process: ChildProcess;
 
-  start(sampleRate: number): void {
-    this.process = spawn('transcribe', [
-      '--stdin',
-      '--format', `pcm16:${sampleRate}:1`,
-      '--json',
-      '--volatile'
-    ]);
+  start(): void {
+    this.process = spawn('./swift/speech-recognizer/.build/release/speech-recognizer');
 
     // Read JSON lines from stdout
     const rl = readline.createInterface({ input: this.process.stdout });
@@ -179,7 +177,9 @@ class SpeechRecognizer {
   }
 
   feedAudio(pcmBuffer: Buffer): void {
-    this.process.stdin.write(pcmBuffer);
+    if (!this.process.stdin.write(pcmBuffer)) {
+      // Backpressure: stdin buffer full, drop frame
+    }
   }
 
   stop(): void {
@@ -188,17 +188,7 @@ class SpeechRecognizer {
 }
 ```
 
-**One recognizer per WebSocket connection**: Each connected client gets its own swift-transcribe process. The process lifecycle matches the WebSocket connection.
-
-**Option B (Fallback): File-based IPC**
-
-If modifying swift-transcribe is deferred:
-1. Write incoming audio to a named pipe or temp file
-2. Run swift-transcribe on the file
-3. Watch the output markdown file for changes
-4. Parse new lines and emit as transcript events
-
-This is simpler but adds latency and loses interim results. Not recommended for production.
+**One recognizer per WebSocket connection**: Each connected client gets its own process. The process lifecycle matches the WebSocket connection.
 
 ### Phase 3: TTS Audio Streaming
 
@@ -346,7 +336,7 @@ Add client-side Voice Activity Detection using `@ricky0123/vad-web` (Silero VAD 
 **Alternative: Server-side VAD**
 - Could also run VAD on the server to simplify the client
 - But adds latency and the server is already running speech recognition
-- swift-transcribe's SpeechTranscriber may handle utterance boundaries internally
+- speech-recognizer's SpeechTranscriber may handle utterance boundaries internally
 - Decision: Start with client-side VAD for lower latency; can move to server if simpler
 
 ### Phase 3: AudioContext Buffer Playback
@@ -472,7 +462,7 @@ class AudioWebSocket {
    - Provides instant feedback for UI (show "listening..." indicator)
    - ~2MB ONNX model, loads once
 
-2. **Server-side (swift-transcribe implicit)**:
+2. **Server-side (speech-recognizer implicit)**:
    - SpeechTranscriber internally handles utterance boundaries via its finalized results
    - VAD events from client serve as hints but server makes final segmentation decisions
    - Server emits `transcript-final` when it determines an utterance is complete
@@ -498,7 +488,7 @@ If Silero VAD adds too much bundle size or complexity:
 ### Web Speech API Fallback
 
 - **Keep Web Speech API code** in the browser as a fallback
-- If swift-transcribe is not available (not installed, not macOS), fall back to browser speech recognition
+- If speech-recognizer is not available (not installed, not macOS), fall back to browser speech recognition
 - Browser sends `audio-start` → server responds with `{ "type": "error", "message": "speech recognition unavailable, use browser fallback" }` → client activates Web Speech API
 - User can also manually toggle between server and browser recognition in settings
 
@@ -512,7 +502,7 @@ If Silero VAD adds too much bundle size or complexity:
 ### Phased Rollout
 
 1. **Phase 1**: Add WebSocket endpoint + AudioWorklet capture. Server receives audio but doesn't process it yet. Keep Web Speech API active.
-2. **Phase 2**: Add swift-transcribe integration. Server does speech recognition. Client can toggle between server and browser recognition.
+2. **Phase 2**: Add speech-recognizer integration. Server does speech recognition. Client can toggle between server and browser recognition.
 3. **Phase 3**: Add TTS audio streaming over WebSocket. Client can toggle between WS playback and existing SSE+fetch.
 4. **Phase 4**: Add VAD. Polish. Make WS the default with automatic fallback.
 
@@ -548,26 +538,27 @@ If Silero VAD adds too much bundle size or complexity:
 
 ### Phase 2: Server-Side Speech Recognition (~3-4 sessions)
 
-**Goal**: Server transcribes audio using swift-transcribe and sends transcripts back to browser.
+**Goal**: Server transcribes audio using speech-recognizer and sends transcripts back to browser.
 
-**swift-transcribe tasks**:
-- [ ] Add `--stdin` flag that reads PCM audio from stdin instead of mic capture
-- [ ] Add `StdinAudioSource` class producing `AsyncStream<TimestampedBuffer>` from stdin
-- [ ] Add `--format pcm16:16000:1` flag to specify input format
-- [ ] Add `--json` flag for JSON line output to stdout
-- [ ] Re-enable volatile results with `--volatile` flag
-- [ ] JSON output format: `{"type":"interim","text":"..."}` and `{"type":"final","text":"..."}`
-- [ ] Skip AVAudioEngine/ScreenCaptureKit initialization in stdin mode
-- [ ] Test with piped audio: `cat audio.raw | transcribe --stdin --format pcm16:16000:1 --json`
+**Swift binary tasks** (in `swift/speech-recognizer/`):
+- [ ] Create Swift package with `Package.swift`
+- [ ] Implement `StdinAudioSource` — reads PCM16 LE 16kHz mono from stdin, produces `AsyncStream<TimestampedBuffer>`
+- [ ] Construct `AVAudioPCMBuffer` from raw bytes with correct format and frameLength
+- [ ] Compute timestamps from cumulative sample count, not wall clock
+- [ ] Wire `SpeechTranscriber` with `reportingOptions: [.volatileResults]`
+- [ ] Output JSON lines to stdout: `{"type":"interim","text":"..."}` and `{"type":"final","text":"..."}`
+- [ ] Handle stdin EOF gracefully — finish async stream, flush remaining results
+- [ ] Test with piped audio: `cat audio.raw | .build/release/speech-recognizer`
+- [ ] Add build script / Makefile for `swift build -c release`
 
 **Server tasks**:
 - [ ] Create `src/speech-recognition.ts` module
-- [ ] Spawn `transcribe --stdin --json --volatile --format pcm16:16000:1` as child process
+- [ ] Spawn `speech-recognizer` as child process
 - [ ] Pipe incoming WebSocket binary frames to child process stdin
 - [ ] Parse JSON lines from stdout → emit `transcript-interim` and `transcript-final` over WS
 - [ ] On `transcript-final`: create utterance in queue (same as current `POST /api/potential-utterances`)
 - [ ] Handle process lifecycle: start on first audio, restart on crash, stop on WS disconnect
-- [ ] Add `--no-transcribe` server flag to disable (for environments without swift-transcribe)
+- [ ] Add `--no-transcribe` server flag to disable (for environments without speech-recognizer binary)
 
 **Client tasks**:
 - [ ] Handle `transcript-interim` messages → display in interim text area
@@ -579,7 +570,7 @@ If Silero VAD adds too much bundle size or complexity:
 - [ ] Speak into mic → see interim transcripts updating in UI → see final transcript appear as message
 - [ ] Verify utterance appears in Claude Code via hooks
 - [ ] Test with various speech patterns: short utterances, long sentences, pauses
-- [ ] Fallback: disable server recognition → Web Speech API still works
+- [ ] Fallback: disable server recognition (or speech-recognizer not built) → Web Speech API still works
 
 ### Phase 3: TTS Audio Streaming (~2 sessions)
 
@@ -637,8 +628,8 @@ If Silero VAD adds too much bundle size or complexity:
 - `@ricky0123/vad-web` — Silero VAD v5 for browser (Phase 4)
 - `onnxruntime-web` — ONNX Runtime for Silero VAD (Phase 4, peer dep of vad-web)
 
-### External
-- `swift-transcribe` (modified) — needs `--stdin`, `--json`, `--volatile` flags
+### Internal (built from source)
+- `swift/speech-recognizer/` — standalone Swift binary for stdin-to-transcript (macOS 26+, SpeechTranscriber API)
 
 ---
 
@@ -646,23 +637,23 @@ If Silero VAD adds too much bundle size or complexity:
 
 ### Risks
 
-1. **swift-transcribe modification scope**: Adding stdin input mode requires non-trivial Swift changes. The `SpeechAnalyzer` framework may have expectations about audio timing/format that make stdin piping tricky. `TimestampedBuffer` requires `AVAudioPCMBuffer` construction with correct `AVAudioFormat` and `frameLength`. Timestamps should be computed from sample count (not wall clock) since network latency would skew `mach_continuous_time()`. Mitigation: Test early with a simple stdin prototype.
+1. **Speech recognizer implementation**: Building the standalone Swift binary requires careful handling of `AVAudioPCMBuffer` construction, `AVAudioFormat`, and `frameLength`. Timestamps should be computed from sample count (not wall clock) since network latency would skew `mach_continuous_time()`. Relevant code can be adapted from speech-recognizer. Mitigation: Test early with a simple stdin prototype.
 
-2. **macOS 26.0 requirement**: swift-transcribe uses `@available(macOS 26.0, *)` — the `SpeechTranscriber` and `SpeechAnalyzer` APIs are macOS 26+ only. Anyone on macOS 15 (Sequoia) or earlier cannot use server-side recognition. Mitigation: Maintain Web Speech API fallback; consider Whisper API as alternative backend for older macOS versions.
+2. **macOS 26.0 requirement**: `SpeechTranscriber` and `SpeechAnalyzer` APIs are macOS 26+ only. Anyone on macOS 15 (Sequoia) or earlier cannot use server-side recognition. Mitigation: Maintain Web Speech API fallback; consider adding SFSpeechRecognizer (macOS 10.15+) or Whisper API as alternative backends later.
 
 3. **iOS Safari AudioWorklet reliability**: Some users report AudioWorklet issues on specific iOS versions (notably iOS 16-18) where AudioWorklet nodes can silently stop processing. Mitigation: Include ScriptProcessorNode fallback; test on multiple iOS versions.
 
 4. **AudioContext sample rate mismatch**: iOS Safari ignores the requested `sampleRate` and uses the hardware rate (typically 48kHz). **This is not a risk to mitigate — it is the expected behavior.** The AudioWorklet MUST capture at native rate and downsample to 16kHz before sending. The worklet's `frameSize` must be calculated based on the actual AudioContext sample rate, not a hardcoded 16kHz assumption. See "Resolved Decisions" below.
 
-5. **swift-transcribe process management**: Spawning a process per WS connection could be resource-intensive. `SpeechAnalyzer` loads a neural model (1-3s startup). Mitigation: Keep process running across utterances; limit to one recognizer at a time (only active session). Consider a singleton process that multiplexes audio.
+5. **Speech recognizer process management**: Spawning a process per WS connection could be resource-intensive. `SpeechAnalyzer` loads a neural model (1-3s startup). Mitigation: Keep process running across utterances; limit to one recognizer at a time (only active session). Consider a singleton process that multiplexes audio.
 
 6. **Echo cancellation**: Browser's `echoCancellation` constraint is designed for WebRTC (canceling far-end audio), NOT for same-device playback. It will not reliably handle the browser playing TTS audio through speakers while capturing mic. **Muting mic audio streaming during TTS playback MUST be the default behavior, not optional.** See "Resolved Decisions" below.
 
-7. **Latency budget**: Voice-to-transcript latency depends on swift-transcribe's processing speed (~190x real-time is fast, but startup time matters). Mitigation: Keep the process running; don't restart per utterance.
+7. **Latency budget**: Voice-to-transcript latency depends on speech-recognizer's processing speed (~190x real-time is fast, but startup time matters). Mitigation: Keep the process running; don't restart per utterance.
 
 8. **`say` command does not support stdout streaming**: `say -o -` and `say -o /dev/stdout` do not work — they produce 0 or 32 bytes instead of full audio. The file-based approach (render WAV, strip header, stream PCM) is the only reliable path. Can be replaced later with a streaming TTS provider (ElevenLabs, OpenAI).
 
-9. **No backpressure mechanism**: If swift-transcribe falls behind, binary audio frames accumulate. The stdin pipe has a kernel buffer (~64KB on macOS). If the pipe fills, `process.stdin.write()` returns false and Node.js buffers in memory. Mitigation: Monitor `write()` return value; drop frames if buffer exceeds threshold.
+9. **No backpressure mechanism**: If speech-recognizer falls behind, binary audio frames accumulate. The stdin pipe has a kernel buffer (~64KB on macOS). If the pipe fills, `process.stdin.write()` returns false and Node.js buffers in memory. Mitigation: Monitor `write()` return value; drop frames if buffer exceeds threshold.
 
 10. **Security**: The WebSocket endpoint has no authentication. Low risk on localhost, but HTTPS remote access (already a feature) would allow any LAN device to connect. Mitigation: Add a simple token/cookie check for remote connections.
 
@@ -688,7 +679,7 @@ If Silero VAD adds too much bundle size or complexity:
 
 2. **Should VAD control audio streaming** (only send during speech) or should we stream continuously and use VAD events as metadata? Continuous is simpler but uses more bandwidth; gated streaming saves bandwidth but risks clipping.
 
-3. **How should swift-transcribe handle the audio format conversion?** The `makeAnalyzerInputStream` function already handles conversion via `AVAudioConverter`. Verify that `SpeechAnalyzer.bestAvailableAudioFormat()` is compatible with 16kHz PCM16 mono input, or let swift-transcribe handle the conversion internally.
+3. **How should speech-recognizer handle the audio format conversion?** The `makeAnalyzerInputStream` function already handles conversion via `AVAudioConverter`. Verify that `SpeechAnalyzer.bestAvailableAudioFormat()` is compatible with 16kHz PCM16 mono input, or let speech-recognizer handle the conversion internally.
 
 4. **Should we use a single WebSocket for all purposes** (audio + control + session management) or have separate connections? Single is simpler for the client; separate allows independent lifecycle management.
 
@@ -709,6 +700,7 @@ If Silero VAD adds too much bundle size or complexity:
 - `public/index.html` — Add VAD library script tag (Phase 4)
 - `package.json` — Add `ws` dependency
 
-### External Modifications
-- `/Users/jtennant/Development/jtennant-transcriber/Sources/Transcribe/Transcribe.swift` — Add `--stdin`, `--json`, `--volatile` flags
-- `/Users/jtennant/Development/jtennant-transcriber/Sources/Transcribe/` — Add `StdinAudioSource.swift`
+### New Swift Package
+- `swift/speech-recognizer/Package.swift` — Swift package manifest
+- `swift/speech-recognizer/Sources/SpeechRecognizer/main.swift` — Entry point, stdin reading, JSON output
+- `swift/speech-recognizer/Sources/SpeechRecognizer/StdinAudioSource.swift` — PCM stdin to AsyncStream adapter
