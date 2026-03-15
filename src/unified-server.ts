@@ -284,16 +284,16 @@ async function generateSounds(): Promise<void> {
   sounds.chime = chimePath;
 
   const listeningPath = path.join(soundsDir, 'listening-pulse.wav');
-  await convertSystemSound('Pop', listeningPath);
+  await convertSystemSound('Purr', listeningPath);
   scaleWavVolume(listeningPath, SFX_VOLUME);
   sounds.listeningPulse = listeningPath;
 
   const processingPath = path.join(soundsDir, 'processing-pulse.wav');
-  await convertSystemSound('Purr', processingPath);
+  await convertSystemSound('Pop', processingPath);
   scaleWavVolume(processingPath, SFX_VOLUME);
   sounds.processingPulse = processingPath;
 
-  debugLog(`[Sounds] Converted system sounds (Tink, Pop, Purr) to ${soundsDir}`);
+  debugLog(`[Sounds] Converted system sounds (Tink, Purr, Pop) to ${soundsDir}`);
 }
 
 // Cleanup sounds directory on shutdown
