@@ -8,7 +8,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { execFile, execFileSync, type ChildProcess } from 'child_process';
+import { execFile, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
@@ -247,66 +247,53 @@ const sounds: SoundLibrary = {
 
 let soundsDir: string | null = null;
 
-// Resolve ffmpeg binary — check explicit paths for non-interactive shells
-function findFfmpeg(): string {
-  const candidates = ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', 'ffmpeg'];
-  for (const candidate of candidates) {
-    try {
-      execFileSync(candidate, ['-version'], { stdio: 'ignore' });
-      return candidate;
-    } catch { /* try next */ }
-  }
-  throw new Error('ffmpeg not found');
-}
-
-async function generateSounds(): Promise<void> {
-  const ffmpegPath = findFfmpeg();
-
-  // Create per-process temp directory (not shared, avoids symlink/tampering risks)
-  soundsDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mcp-voice-hooks-sounds-'));
-  // Restrict permissions to owner only
-  await fs.promises.chmod(soundsDir, 0o700);
-
-  // All sounds: 22050Hz, mono, 16-bit PCM WAV (matches TTS pipeline)
-  const ffmpegBase = ['-ar', '22050', '-ac', '1', '-sample_fmt', 's16', '-f', 'wav', '-y'];
-
-  // Chime: two-note ascending (880Hz 100ms + 1100Hz 100ms), volume=0.3
-  const chimePath = path.join(soundsDir, 'chime.wav');
-  await renderFfmpeg(ffmpegPath, [
-    '-f', 'lavfi', '-i',
-    'sine=frequency=880:duration=0.1,afade=t=out:st=0.05:d=0.05[a];sine=frequency=1100:duration=0.1,adelay=100|100,afade=t=out:st=0.05:d=0.05[b];[a][b]amix=inputs=2:duration=longest,volume=0.3',
-    ...ffmpegBase, chimePath,
-  ]);
-  sounds.chime = chimePath;
-
-  // Listening pulse: soft warm tone at 220Hz + 440Hz harmonic, 350ms with fade, volume=0.15
-  const listeningPath = path.join(soundsDir, 'listening-pulse.wav');
-  await renderFfmpeg(ffmpegPath, [
-    '-f', 'lavfi', '-i',
-    'sine=frequency=220:duration=0.35,afade=t=in:d=0.04,afade=t=out:st=0.1:d=0.25[a];sine=frequency=440:duration=0.3,volume=0.3,afade=t=in:d=0.04,afade=t=out:st=0.08:d=0.22[b];[a][b]amix=inputs=2:duration=longest,volume=0.15',
-    ...ffmpegBase, listeningPath,
-  ]);
-  sounds.listeningPulse = listeningPath;
-
-  // Processing pulse: low thump at 90Hz, 200ms with quick attack, volume=0.1
-  const processingPath = path.join(soundsDir, 'processing-pulse.wav');
-  await renderFfmpeg(ffmpegPath, [
-    '-f', 'lavfi', '-i',
-    'sine=frequency=90:duration=0.2,afade=t=in:d=0.03,afade=t=out:st=0.05:d=0.15,volume=0.1',
-    ...ffmpegBase, processingPath,
-  ]);
-  sounds.processingPulse = processingPath;
-
-  debugLog(`[Sounds] Pre-rendered chime, listening pulse, processing pulse to ${soundsDir}`);
-}
-
-function renderFfmpeg(ffmpegPath: string, args: string[]): Promise<void> {
+// Convert a macOS system sound to WAV PCM16@22050Hz mono using afconvert (built-in, no dependencies)
+function convertSystemSound(sourceName: string, destPath: string): Promise<void> {
+  const source = `/System/Library/Sounds/${sourceName}.aiff`;
   return new Promise((resolve, reject) => {
-    execFile(ffmpegPath, args, (error) => {
+    execFile('afconvert', [source, destPath, '-d', 'LEI16@22050', '-c', '1', '-f', 'WAVE'], (error) => {
       if (error) reject(error);
       else resolve();
     });
   });
+}
+
+// Scale PCM16 samples in a WAV file by a volume factor (0.0–1.0)
+function scaleWavVolume(wavPath: string, volume: number): void {
+  const buf = fs.readFileSync(wavPath);
+  const dataOffset = findWavDataOffset(buf);
+  for (let i = dataOffset; i + 1 < buf.length; i += 2) {
+    const sample = buf.readInt16LE(i);
+    buf.writeInt16LE(Math.round(sample * volume), i);
+  }
+  fs.writeFileSync(wavPath, buf);
+}
+
+async function generateSounds(): Promise<void> {
+  // Create per-process temp directory
+  soundsDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mcp-voice-hooks-sounds-'));
+  await fs.promises.chmod(soundsDir, 0o700);
+
+  // Convert macOS system sounds to WAV (PCM16@22050Hz mono, matching TTS pipeline)
+  // Scale volume to ~40% so feedback sounds are subtle and don't overpower TTS
+  const SFX_VOLUME = 0.4;
+
+  const chimePath = path.join(soundsDir, 'chime.wav');
+  await convertSystemSound('Tink', chimePath);
+  scaleWavVolume(chimePath, SFX_VOLUME);
+  sounds.chime = chimePath;
+
+  const listeningPath = path.join(soundsDir, 'listening-pulse.wav');
+  await convertSystemSound('Pop', listeningPath);
+  scaleWavVolume(listeningPath, SFX_VOLUME);
+  sounds.listeningPulse = listeningPath;
+
+  const processingPath = path.join(soundsDir, 'processing-pulse.wav');
+  await convertSystemSound('Purr', processingPath);
+  scaleWavVolume(processingPath, SFX_VOLUME);
+  sounds.processingPulse = processingPath;
+
+  debugLog(`[Sounds] Converted system sounds (Tink, Pop, Purr) to ${soundsDir}`);
 }
 
 // Cleanup sounds directory on shutdown
