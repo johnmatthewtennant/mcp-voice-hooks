@@ -56,3 +56,6 @@ npm-pack-*
 # CLAUDE.local.md
 CLAUDE.local.md
 .claude/settings.json
+
+# Swift build artifacts
+.build/
