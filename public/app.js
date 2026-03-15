@@ -111,17 +111,9 @@ class MessengerClient {
         // Settings
         this.settingsToggleHeader = document.getElementById('settingsToggleHeader');
         this.settingsContent = document.getElementById('settingsContent');
-        this.voiceResponsesToggle = document.getElementById('voiceResponsesToggle');
-        this.voiceOptions = document.getElementById('voiceOptions');
-        this.languageSelect = document.getElementById('languageSelect');
-        this.voiceSelect = document.getElementById('voiceSelect');
-        this.localVoicesGroup = document.getElementById('localVoicesGroup');
-        this.cloudVoicesGroup = document.getElementById('cloudVoicesGroup');
         this.speechRateSlider = document.getElementById('speechRate');
         this.speechRateInput = document.getElementById('speechRateInput');
         this.testTTSBtn = document.getElementById('testTTSBtn');
-        this.rateWarning = document.getElementById('rateWarning');
-        this.systemVoiceInfo = document.getElementById('systemVoiceInfo');
 
         // Session sidebar elements
         this.sessionSidebar = document.getElementById('sessionSidebar');
@@ -138,10 +130,7 @@ class MessengerClient {
         this.debug = localStorage.getItem('voiceHooksDebug') === 'true';
 
         // TTS state
-        this.voices = [];
-        this.selectedVoice = 'system';
         this.speechRate = 1.0;
-        this.speechPitch = 1.0;
 
         // Audio playback queue (for server-rendered system voice)
         this.audioQueue = [];
@@ -167,7 +156,6 @@ class MessengerClient {
 
         // Initialize
         this.initializeSpeechRecognition();
-        this.initializeSpeechSynthesis();
         this.initializeTTSEvents();
         this.initializeSessionSidebar();
         this.setupEventListeners();
@@ -187,46 +175,6 @@ class MessengerClient {
         }
     }
 
-    initializeSpeechSynthesis() {
-        // Check for browser support
-        if (!window.speechSynthesis) {
-            console.warn('Speech synthesis not supported in this browser');
-            return;
-        }
-
-        // Get available voices
-        this.voices = [];
-
-        // Enhanced voice loading with deduplication
-        const loadVoices = () => {
-            const voices = window.speechSynthesis.getVoices();
-
-            // Deduplicate voices - keep the first occurrence of each unique voice
-            const deduplicatedVoices = [];
-            const seen = new Set();
-
-            voices.forEach(voice => {
-                // Create a unique key based on name, language, and URI
-                const key = `${voice.name}-${voice.lang}-${voice.voiceURI}`;
-                if (!seen.has(key)) {
-                    seen.add(key);
-                    deduplicatedVoices.push(voice);
-                }
-            });
-
-            this.voices = deduplicatedVoices;
-            this.populateVoiceList();
-        };
-
-        // Load voices initially and with a delayed retry for reliability
-        loadVoices();
-        setTimeout(loadVoices, 100);
-
-        // Set up voice change listener
-        if (window.speechSynthesis.onvoiceschanged !== undefined) {
-            window.speechSynthesis.onvoiceschanged = loadVoices;
-        }
-    }
 
     initializeTTSEvents() {
         // Connect to SSE for TTS events
@@ -241,11 +189,6 @@ class MessengerClient {
                     // This handles both initial connect and reconnect after server restart
                     console.log('[SSE] Connected to server, syncing voice state');
                     this.syncVoiceStateToServer();
-                } else if (data.type === 'speak' && data.text) {
-                    // If system voice is selected, don't do browser TTS — audio will arrive via tts-audio event
-                    if (this.selectedVoice !== 'system') {
-                        this.speakText(data.text);
-                    }
                 } else if (data.type === 'tts-audio' && data.audioUrl) {
                     // Server-rendered audio ready — queue for playback (SSE fallback)
                     // Skip if WS is connected (audio arrives as binary frames)
@@ -499,64 +442,7 @@ class MessengerClient {
         this.audioPlaying = false;
     }
 
-    speakText(text) {
-        // Browser TTS only — system voice audio arrives via SSE tts-audio events
-        if (!window.speechSynthesis) {
-            console.error('Speech synthesis not available');
-            return;
-        }
-
-        // Cancel any ongoing speech
-        window.speechSynthesis.cancel();
-
-        // Create utterance
-        const utterance = new SpeechSynthesisUtterance(text);
-
-        // Set voice if using browser voice
-        if (this.selectedVoice && this.selectedVoice.startsWith('browser:')) {
-            const voiceIndex = parseInt(this.selectedVoice.substring(8));
-            if (this.voices[voiceIndex]) {
-                utterance.voice = this.voices[voiceIndex];
-            }
-        }
-
-        // Set speech properties
-        utterance.rate = this.speechRate;
-        utterance.pitch = this.speechPitch;
-
-        // Event handlers
-        utterance.onstart = () => {
-            this.debugLog('Started speaking:', text);
-        };
-
-        utterance.onend = () => {
-            this.debugLog('Finished speaking');
-        };
-
-        utterance.onerror = (event) => {
-            console.error('Speech synthesis error:', event);
-        };
-
-        // Speak the text
-        window.speechSynthesis.speak(utterance);
-    }
-
     loadPreferences() {
-        // Load voice responses preference from localStorage
-        const savedVoiceResponses = localStorage.getItem('voiceResponsesEnabled');
-        if (savedVoiceResponses !== null) {
-            const enabled = savedVoiceResponses === 'true';
-            this.voiceResponsesToggle.checked = enabled;
-            this.voiceOptions.style.display = enabled ? 'block' : 'none';
-            this.updateVoiceResponses(enabled);
-        }
-
-        // Load voice selection
-        const savedVoice = localStorage.getItem('selectedVoice');
-        if (savedVoice) {
-            this.selectedVoice = savedVoice;
-        }
-
         // Load speech rate
         const savedRate = localStorage.getItem('speechRate');
         if (savedRate) {
@@ -571,8 +457,6 @@ class MessengerClient {
             this.recognitionMode = savedRecognitionMode;
         }
 
-        // Sync selected voice to server on load
-        this.syncSelectedVoiceToServer();
     }
 
     async checkServerRecognition() {
@@ -611,118 +495,6 @@ class MessengerClient {
         return this.recognitionMode === 'server' && this.serverRecognitionAvailable && this.wsConnected;
     }
 
-    populateLanguageFilter() {
-        if (!this.languageSelect || !this.voices) return;
-
-        const currentSelection = this.languageSelect.value || 'en-US';
-        this.languageSelect.innerHTML = '';
-
-        const allOption = document.createElement('option');
-        allOption.value = 'all';
-        allOption.textContent = 'All Languages';
-        this.languageSelect.appendChild(allOption);
-
-        const languageCodes = new Set();
-        this.voices.forEach(voice => {
-            languageCodes.add(voice.lang);
-        });
-
-        Array.from(languageCodes).sort().forEach(lang => {
-            const option = document.createElement('option');
-            option.value = lang;
-            option.textContent = lang;
-            this.languageSelect.appendChild(option);
-        });
-
-        this.languageSelect.value = currentSelection;
-        if (this.languageSelect.value !== currentSelection) {
-            this.languageSelect.value = 'en-US';
-        }
-    }
-
-    populateVoiceList() {
-        if (!this.voiceSelect || !this.localVoicesGroup || !this.cloudVoicesGroup) return;
-
-        this.populateLanguageFilter();
-
-        this.localVoicesGroup.innerHTML = '';
-        this.cloudVoicesGroup.innerHTML = '';
-
-        const excludedVoices = [
-            'Eddy', 'Flo', 'Grandma', 'Grandpa', 'Reed', 'Rocko', 'Sandy', 'Shelley',
-            'Albert', 'Bad News', 'Bahh', 'Bells', 'Boing', 'Bubbles', 'Cellos',
-            'Good News', 'Jester', 'Organ', 'Superstar', 'Trinoids', 'Whisper',
-            'Wobble', 'Zarvox', 'Fred', 'Junior', 'Kathy', 'Ralph'
-        ];
-
-        const selectedLanguage = this.languageSelect ? this.languageSelect.value : 'en-US';
-
-        this.voices.forEach((voice, index) => {
-            const voiceLang = voice.lang;
-            let shouldInclude = selectedLanguage === 'all' || voiceLang === selectedLanguage;
-
-            if (shouldInclude) {
-                const voiceName = voice.name;
-                const isExcluded = excludedVoices.some(excluded =>
-                    voiceName.toLowerCase().startsWith(excluded.toLowerCase())
-                );
-
-                if (!isExcluded) {
-                    const option = document.createElement('option');
-                    option.value = `browser:${index}`;
-                    option.textContent = `${voice.name} (${voice.lang})`;
-
-                    if (voice.localService) {
-                        this.localVoicesGroup.appendChild(option);
-                    } else {
-                        this.cloudVoicesGroup.appendChild(option);
-                    }
-                }
-            }
-        });
-
-        if (this.localVoicesGroup.children.length === 0) {
-            this.localVoicesGroup.style.display = 'none';
-        } else {
-            this.localVoicesGroup.style.display = '';
-        }
-
-        if (this.cloudVoicesGroup.children.length === 0) {
-            this.cloudVoicesGroup.style.display = 'none';
-        } else {
-            this.cloudVoicesGroup.style.display = '';
-        }
-
-        // Restore selection or find default
-        if (this.selectedVoice) {
-            this.voiceSelect.value = this.selectedVoice;
-        }
-
-        this.updateVoiceWarnings();
-    }
-
-    updateVoiceWarnings() {
-        if (this.selectedVoice === 'system') {
-            this.systemVoiceInfo.style.display = 'flex';
-            this.rateWarning.style.display = 'none';
-        } else if (this.selectedVoice && this.selectedVoice.startsWith('browser:')) {
-            const voiceIndex = parseInt(this.selectedVoice.substring(8));
-            const voice = this.voices[voiceIndex];
-
-            if (voice) {
-                const isGoogleVoice = voice.name.toLowerCase().includes('google');
-                this.rateWarning.style.display = isGoogleVoice ? 'flex' : 'none';
-                this.systemVoiceInfo.style.display = voice.localService ? 'flex' : 'none';
-            } else {
-                this.rateWarning.style.display = 'none';
-                this.systemVoiceInfo.style.display = 'none';
-            }
-        } else {
-            this.rateWarning.style.display = 'none';
-            this.systemVoiceInfo.style.display = 'none';
-        }
-    }
-
     setupEventListeners() {
         // Text input events
         this.messageInput.addEventListener('keydown', (e) => this.handleTextInputKeydown(e));
@@ -751,29 +523,6 @@ class MessengerClient {
             }
         });
 
-        // Voice responses toggle
-        this.voiceResponsesToggle.addEventListener('change', async (e) => {
-            const enabled = e.target.checked;
-            await this.updateVoiceResponses(enabled);
-            // Show/hide voice options based on toggle
-            this.voiceOptions.style.display = enabled ? 'block' : 'none';
-        });
-
-        // Voice selection
-        this.voiceSelect.addEventListener('change', (e) => {
-            this.selectedVoice = e.target.value;
-            localStorage.setItem('selectedVoice', this.selectedVoice);
-            this.updateVoiceWarnings();
-            this.syncSelectedVoiceToServer();
-        });
-
-        // Language filter
-        if (this.languageSelect) {
-            this.languageSelect.addEventListener('change', () => {
-                this.populateVoiceList();
-            });
-        }
-
         // Speech rate slider
         if (this.speechRateSlider) {
             this.speechRateSlider.addEventListener('input', (e) => {
@@ -799,10 +548,18 @@ class MessengerClient {
             });
         }
 
-        // Test TTS button
+        // Test TTS button — triggers server-side TTS
         if (this.testTTSBtn) {
-            this.testTTSBtn.addEventListener('click', () => {
-                this.speakText('This is Voice Mode for Claude Code. How can I help you today?');
+            this.testTTSBtn.addEventListener('click', async () => {
+                try {
+                    await fetch(`${this.baseUrl}/api/speak`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: 'This is Voice Mode for Claude Code. How can I help you today?' })
+                    });
+                } catch (error) {
+                    console.error('Failed to test voice:', error);
+                }
             });
         }
     }
@@ -1022,8 +779,9 @@ class MessengerClient {
                 this.recognition.start();
             }
 
-            // Activate voice input when mic is on
+            // Activate voice input and voice responses when mic is on
             await this.updateVoiceInputState(true);
+            await this.updateVoiceResponses(true);
         } catch (e) {
             console.error('Failed to start recognition:', e);
             alert('Failed to start speech recognition');
@@ -1051,8 +809,9 @@ class MessengerClient {
         this.stopAudioCapture();
         this.disconnectAudioWebSocket();
 
-        // Deactivate voice input when mic is turned off
+        // Deactivate voice input and voice responses when mic is turned off
         await this.updateVoiceInputState(false);
+        await this.updateVoiceResponses(false);
     }
 
     initializeSpeechRecognition() {
@@ -1155,7 +914,7 @@ class MessengerClient {
             await fetch(`${this.baseUrl}/api/selected-voice`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ selectedVoice: this.selectedVoice, speechRate: Math.round(this.speechRate * 200) })
+                body: JSON.stringify({ selectedVoice: 'system', speechRate: Math.round(this.speechRate * 200) })
             });
         } catch (error) {
             this.debugLog('Failed to sync selected voice to server:', error);
@@ -1183,8 +942,8 @@ class MessengerClient {
         this.clearAudioQueue();
         // Re-send current browser voice state to the server after a session reset
         await this.updateVoiceInputState(this.isListening);
-        const voiceResponsesEnabled = this.voiceResponsesToggle ? this.voiceResponsesToggle.checked : false;
-        await this.updateVoiceResponses(voiceResponsesEnabled);
+        // Voice responses are tied to listening state
+        await this.updateVoiceResponses(this.isListening);
         await this.syncSelectedVoiceToServer();
     }
 
