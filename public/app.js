@@ -144,6 +144,10 @@ class MessengerClient {
         this.audioPlayer = new AudioPlayer();
         this.wsConnected = false;
 
+        // Heartbeat state (processing indicator sound)
+        this.heartbeatContext = null;
+        this.heartbeatInterval = null;
+
         // Session state
         this.sessions = [];
         this.activeSessionKey = null;
@@ -214,12 +218,16 @@ class MessengerClient {
         }
         // Play a chime on transition to waiting; cancel pending chime on transition away
         if (isWaiting) {
+            this.stopHeartbeat();
             if (!this._waitingChimePending) {
                 this._waitingChimePending = true;
                 this.playWaitingChimeWhenReady();
             }
         } else {
             this._waitingChimePending = false;
+            if (this.isListening) {
+                this.startHeartbeat();
+            }
         }
     }
 
@@ -277,6 +285,51 @@ class MessengerClient {
             osc2.onended = () => ctx.close().catch(() => {});
         } catch (e) {
             console.warn('Could not play waiting chime:', e);
+        }
+    }
+
+    startHeartbeat() {
+        if (this.heartbeatInterval) return; // already running
+        try {
+            if (!this.heartbeatContext) {
+                this.heartbeatContext = new AudioContext();
+            }
+            if (this.heartbeatContext.state === 'suspended') {
+                this.heartbeatContext.resume();
+            }
+            this._playHeartbeatPulse();
+            this.heartbeatInterval = setInterval(() => this._playHeartbeatPulse(), 2500);
+        } catch (e) {
+            console.warn('Could not start heartbeat:', e);
+        }
+    }
+
+    stopHeartbeat() {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+        }
+    }
+
+    _playHeartbeatPulse() {
+        if (!this.heartbeatContext || this.heartbeatContext.state === 'closed') return;
+        try {
+            const ctx = this.heartbeatContext;
+            const now = ctx.currentTime;
+
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.frequency.value = 70;
+            osc.type = 'sine';
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now);
+            osc.stop(now + 0.25);
+        } catch (e) {
+            // Silently ignore pulse errors
         }
     }
 
@@ -816,6 +869,7 @@ class MessengerClient {
 
     async stopVoiceDictation() {
         this.isListening = false;
+        this.stopHeartbeat();
         if (this.recognition) {
             this.recognition.stop();
         }
@@ -1058,6 +1112,7 @@ class MessengerClient {
                 break;
             case 'tts-start':
                 console.log('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate);
+                this.stopHeartbeat();
                 this.audioPlayer.prepareForPlayback(msg.sampleRate, msg.audioId);
                 // Echo suppression: mute mic audio streaming during TTS playback
                 this._muteAudioCapture(true);
