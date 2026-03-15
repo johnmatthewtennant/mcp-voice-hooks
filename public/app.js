@@ -134,6 +134,7 @@ class MessengerClient {
                 if (data.type === 'connected') {
                     // Connected (or reconnected) to server — sync voice state
                     // This handles both initial connect and reconnect after server restart
+                    console.log('[SSE] Connected to server, syncing voice state');
                     this.syncVoiceStateToServer();
                 } else if (data.type === 'speak' && data.text) {
                     // If system voice is selected, don't do browser TTS — audio will arrive via tts-audio event
@@ -1086,6 +1087,8 @@ class MessengerClient {
     }
 
     async syncVoiceStateToServer() {
+        // Reset audio playback state — old audio from previous server is invalid
+        this.clearAudioQueue();
         // Re-send current browser voice state to the server after a session reset
         await this.updateVoiceInputState(this.isListening);
         const voiceResponsesEnabled = this.voiceResponsesToggle ? this.voiceResponsesToggle.checked : false;
