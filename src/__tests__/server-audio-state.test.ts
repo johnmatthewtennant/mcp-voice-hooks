@@ -14,6 +14,7 @@ describe('ServerAudioState', () => {
     _waitStatusKnown = false;
     _lastWaitStatus = false;
     _ttsActive = false;
+    _hookActive = false;
     _pulseTimer: ReturnType<typeof setInterval> | null = null;
     _chimeDelayTimer: ReturnType<typeof setTimeout> | null = null;
     transitions: string[] = []; // track transitions for assertions
@@ -23,7 +24,10 @@ describe('ServerAudioState', () => {
 
     syncState(): void {
       let desired: typeof this.state;
-      if (!this._isListening) {
+      // Order matters: hookActive check must come before plain !_isListening check
+      if (this._hookActive && !this._isListening) {
+        desired = 'processing';
+      } else if (!this._isListening) {
         desired = 'inactive';
       } else if (this._ttsActive) {
         desired = 'speaking';
@@ -39,12 +43,22 @@ describe('ServerAudioState', () => {
       }
     }
 
+    setHookActive(active: boolean): void {
+      this._hookActive = active;
+      this.syncState();
+    }
+
+    clearHookActiveSilent(): void {
+      this._hookActive = false;
+    }
+
     setListening(isListening: boolean): void {
       this._isListening = isListening;
       if (isListening) {
         this._lastWaitStatus = false;
         this._waitStatusKnown = false;
         this._ttsActive = false;
+        this._hookActive = false;
       }
       this.syncState();
     }
@@ -349,6 +363,69 @@ describe('ServerAudioState', () => {
       state.reapplyFeedbackMode();
       expect(state.soundsPlayed).toHaveLength(0);
       expect(state._pulseTimer).toBeNull();
+    });
+  });
+
+  describe('hookActive (processing state without voice input)', () => {
+    it('should transition to processing when hookActive=true and not listening', () => {
+      state.setHookActive(true);
+      expect(state.state).toBe('processing');
+    });
+
+    it('should transition back to inactive when hookActive cleared', () => {
+      state.setHookActive(true);
+      expect(state.state).toBe('processing');
+      state.setHookActive(false);
+      expect(state.state).toBe('inactive');
+    });
+
+    it('should NOT override voice states when listening is active', () => {
+      state.setListening(true);
+      state.setWaitStatus(true); // listening
+      state.setHookActive(true);
+      // Voice logic takes precedence — still listening, not processing
+      expect(state.state).toBe('listening');
+    });
+
+    it('should show processing when voice turns off while hookActive', () => {
+      state.setListening(true);
+      state.setWaitStatus(true); // listening
+      state.setHookActive(true);
+      expect(state.state).toBe('listening'); // voice takes precedence
+      state.setListening(false);
+      // Now voice is off but hookActive is still true
+      expect(state.state).toBe('processing');
+    });
+
+    it('should clear hookActive when setListening(true) is called', () => {
+      state.setHookActive(true);
+      expect(state.state).toBe('processing');
+      state.setListening(true);
+      expect(state._hookActive).toBe(false);
+      // Back to inactive because waitStatusKnown is false after setListening reset
+      expect(state.state).toBe('inactive');
+    });
+
+    it('clearHookActiveSilent should not trigger state change', () => {
+      state.setHookActive(true);
+      expect(state.state).toBe('processing');
+      const transitionsBefore = state.transitions.length;
+      state.clearHookActiveSilent();
+      // No new transition — state is still 'processing' in the field
+      // (syncState was not called, so state wasn't re-evaluated)
+      expect(state.transitions.length).toBe(transitionsBefore);
+      expect(state._hookActive).toBe(false);
+    });
+
+    it('should record correct transitions for hook-only lifecycle', () => {
+      state.setHookActive(true);   // inactive -> processing
+      state.clearHookActiveSilent(); // no transition
+      // Manually sync to simulate what happens after broadcastVoiceState('stopped')
+      state.syncState();           // processing -> inactive
+      expect(state.transitions).toEqual([
+        'inactive->processing',
+        'processing->inactive',
+      ]);
     });
   });
 });

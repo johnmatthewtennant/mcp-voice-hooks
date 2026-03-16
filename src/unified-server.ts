@@ -338,11 +338,16 @@ class ServerAudioState {
   private _waitStatusKnown = false;
   private _lastWaitStatus = false;
   private _ttsActive = false;
+  private _hookActive = false;
   private _pulseTimer: ReturnType<typeof setInterval> | null = null;
 
   syncState(): void {
     let desired: typeof this.state;
-    if (!this._isListening) {
+    // Order matters: hookActive check must come before plain !_isListening check.
+    // When hooks are firing but voice is off, show processing.
+    if (this._hookActive && !this._isListening) {
+      desired = 'processing';
+    } else if (!this._isListening) {
       desired = 'inactive';
     } else if (this._ttsActive) {
       desired = 'speaking';
@@ -358,12 +363,24 @@ class ServerAudioState {
     }
   }
 
+  setHookActive(active: boolean): void {
+    this._hookActive = active;
+    this.syncState();
+  }
+
+  // Silently clear hookActive without triggering syncState/broadcast.
+  // Used before broadcasting 'stopped' to avoid an intermediate 'inactive' broadcast.
+  clearHookActiveSilent(): void {
+    this._hookActive = false;
+  }
+
   setListening(isListening: boolean): void {
     this._isListening = isListening;
     if (isListening) {
       this._lastWaitStatus = false;
       this._waitStatusKnown = false;
       this._ttsActive = false;
+      this._hookActive = false; // Clear stale hook state on voice activation
     }
     this.syncState();
   }
@@ -1039,6 +1056,7 @@ function registerIfFirst(key: string): void {
       activeCompositeKey = key;
       debugLog(`[Session] New Claude session detected: ${oldKey} → ${key}`);
       setVoiceActive(false);
+      serverAudioState.clearHookActiveSilent(); // Clear stale hook state from previous session
       debugLog(`[Session] Voice state reset for new session`);
       notifySessionReset();
     }
@@ -1077,11 +1095,17 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
     return;
   }
 
+  // Signal that Claude is actively working while stop hook evaluates
+  serverAudioState.setHookActive(true);
+
   const result = await handleHookRequest('stop', session);
 
   // Broadcast "stopped" state when the stop hook truly approves
   // (no utterances delivered back — Claude's turn is ending)
   if (result.decision === 'approve') {
+    // Clear hookActive silently to avoid intermediate 'inactive' broadcast,
+    // then broadcast 'stopped' as the final state.
+    serverAudioState.clearHookActiveSilent();
     broadcastVoiceState('stopped');
   }
 
@@ -1131,6 +1155,9 @@ app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
     res.json({ decision: 'approve' });
     return;
   }
+
+  // Signal that Claude is actively working (shows 'processing' in browser)
+  serverAudioState.setHookActive(true);
 
   const result = handleHookRequest('post-tool', session);
   res.json(result);
