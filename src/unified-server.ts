@@ -1039,13 +1039,46 @@ function registerIfFirst(key: string): void {
   if (activeCompositeKey === null) {
     activeCompositeKey = key;
     debugLog(`[Session] Active changed: ${null} → ${key}`);
+
+    // Check if there's a default session with data that should be migrated
+    const parsed = JSON.parse(key) as [string, string];
+    const newSessionId = parsed[0];
+    if (newSessionId !== 'default') {
+      const defaultKey = compositeKey('default');
+      const defaultSession = sessions.get(defaultKey);
+      if (defaultSession && (defaultSession.queue.utterances.length > 0 || defaultSession.queue.messages.length > 0)) {
+        const newSession = getOrCreateSession(key, newSessionId, null, null);
+        for (const utterance of defaultSession.queue.utterances) {
+          newSession.queue.utterances.push(utterance);
+        }
+        for (const message of defaultSession.queue.messages) {
+          newSession.queue.messages.push(message);
+        }
+        debugLog(`[Session] Migrated ${defaultSession.queue.utterances.length} utterance(s) and ${defaultSession.queue.messages.length} message(s) from default → ${key}`);
+        defaultSession.queue.utterances = [];
+        defaultSession.queue.messages = [];
+      }
+    }
   } else {
     const currentActive = sessions.get(activeCompositeKey);
     const parsed = JSON.parse(key) as [string, string];
     const newSessionId = parsed[0];
 
     if (currentActive && currentActive.sessionId === 'default' && newSessionId !== 'default') {
-      // If the current active is a default session and this is a real session, upgrade
+      // If the current active is a default session and this is a real session, upgrade.
+      // Migrate messages from the default session to the new session.
+      const newSession = getOrCreateSession(key, newSessionId, null, null);
+      if (currentActive.queue.utterances.length > 0 || currentActive.queue.messages.length > 0) {
+        for (const utterance of currentActive.queue.utterances) {
+          newSession.queue.utterances.push(utterance);
+        }
+        for (const message of currentActive.queue.messages) {
+          newSession.queue.messages.push(message);
+        }
+        currentActive.queue.utterances = [];
+        currentActive.queue.messages = [];
+        debugLog(`[Session] Migrated ${newSession.queue.utterances.length} utterance(s) and ${newSession.queue.messages.length} message(s) from default → ${key}`);
+      }
       activeCompositeKey = key;
       debugLog(`[Session] Active upgraded from default → ${key}`);
     } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {

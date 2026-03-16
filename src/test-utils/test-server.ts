@@ -277,6 +277,25 @@ export class TestServer {
   private registerIfFirst(key: string): void {
     if (this.activeCompositeKey === null) {
       this.activeCompositeKey = key;
+
+      // Migrate data from default session to first real session
+      const parsed = JSON.parse(key) as [string, string];
+      const newSessionId = parsed[0];
+      if (newSessionId !== 'default') {
+        const defaultKey = JSON.stringify(['default', 'main']);
+        const defaultSession = this.sessions.get(defaultKey);
+        if (defaultSession && (defaultSession.queue.utterances.length > 0 || defaultSession.queue.messages.length > 0)) {
+          const newSession = this.getOrCreateSession(key, newSessionId);
+          for (const utterance of defaultSession.queue.utterances) {
+            newSession.queue.utterances.push(utterance);
+          }
+          for (const message of defaultSession.queue.messages) {
+            newSession.queue.messages.push(message);
+          }
+          defaultSession.queue.utterances = [];
+          defaultSession.queue.messages = [];
+        }
+      }
     } else {
       const currentActive = this.sessions.get(this.activeCompositeKey);
       const parsed = JSON.parse(key) as [string, string];
@@ -284,6 +303,18 @@ export class TestServer {
 
       if (currentActive && currentActive.sessionId === 'default' && newSessionId !== 'default') {
         // If the current active is a default session and this is a real session, upgrade
+        // Migrate data from default session
+        const newSession = this.getOrCreateSession(key, newSessionId);
+        if (currentActive.queue.utterances.length > 0 || currentActive.queue.messages.length > 0) {
+          for (const utterance of currentActive.queue.utterances) {
+            newSession.queue.utterances.push(utterance);
+          }
+          for (const message of currentActive.queue.messages) {
+            newSession.queue.messages.push(message);
+          }
+          currentActive.queue.utterances = [];
+          currentActive.queue.messages = [];
+        }
         this.activeCompositeKey = key;
       } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
         // Different session_id means new Claude instance — always switch active

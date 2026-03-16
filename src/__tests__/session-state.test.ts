@@ -241,6 +241,40 @@ describe('Per-session state and session lifecycle', () => {
       expect(data.decision).toBe('approve');
     });
 
+    it('voice input before session attach migrates to first real session', async () => {
+      // Voice input arrives before any hook fires (goes to default session)
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Hello before session' }),
+      });
+
+      // Verify utterance is in default session
+      const defaultKey = JSON.stringify(['default', 'main']);
+      const defaultSession = server.sessions.get(defaultKey);
+      expect(defaultSession).toBeDefined();
+      expect(defaultSession!.queue.utterances.length).toBe(1);
+      expect(defaultSession!.queue.utterances[0].text).toBe('Hello before session');
+
+      // First hook fires with a real session ID — should migrate
+      await fetch(`${server.url}/api/hooks/post-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: 'real-session' }),
+      });
+
+      // Verify utterance migrated to real session
+      const realKey = JSON.stringify(['real-session', 'main']);
+      const realSession = server.sessions.get(realKey);
+      expect(realSession).toBeDefined();
+      expect(realSession!.queue.utterances.length).toBe(1);
+      expect(realSession!.queue.utterances[0].text).toBe('Hello before session');
+
+      // Verify default session queue is now empty
+      expect(defaultSession!.queue.utterances.length).toBe(0);
+      expect(defaultSession!.queue.messages.length).toBe(0);
+    });
+
     it('sessions response includes messageCount', async () => {
       // Register session-A as active
       await fetch(`${server.url}/api/hooks/post-tool`, {
