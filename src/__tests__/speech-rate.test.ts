@@ -78,4 +78,51 @@ describe('Speech rate sync', () => {
     const data = await response.json() as any;
     expect(data.speechRate).toBe(276);
   });
+
+  it('should accept feedbackSoundMode alongside selectedVoice', async () => {
+    const response = await fetch(`${server.url}/api/selected-voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selectedVoice: 'system', feedbackSoundMode: 'once' }),
+    });
+    const data = await response.json() as any;
+    expect(data.feedbackSoundMode).toBe('once');
+  });
+
+  it('should ignore invalid feedbackSoundMode values', async () => {
+    const response = await fetch(`${server.url}/api/selected-voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selectedVoice: 'system', feedbackSoundMode: 'invalid' }),
+    });
+    const data = await response.json() as any;
+    expect(data.feedbackSoundMode).toBe('continuous'); // default preserved
+  });
+
+  it('should preserve feedbackSoundMode when not provided', async () => {
+    // Set to 'off' first
+    await fetch(`${server.url}/api/selected-voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selectedVoice: 'system', feedbackSoundMode: 'off' }),
+    });
+    // Now send without feedbackSoundMode
+    const response = await fetch(`${server.url}/api/selected-voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selectedVoice: 'system' }),
+    });
+    const data = await response.json() as any;
+    expect(data.feedbackSoundMode).toBe('off'); // preserved
+  });
+
+  it('should reject non-string feedbackSoundMode', async () => {
+    const response = await fetch(`${server.url}/api/selected-voice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selectedVoice: 'system', feedbackSoundMode: 42 }),
+    });
+    const data = await response.json() as any;
+    expect(data.feedbackSoundMode).toBe('continuous'); // default preserved
+  });
 });

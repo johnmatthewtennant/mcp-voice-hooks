@@ -93,82 +93,6 @@ class AudioPlayer {
     }
 }
 
-// VoiceStateMachine: tracks Claude's state for visual UI feedback
-// Uses a derived-state reducer: desiredState = f(isListening, waitStatusKnown, lastWaitStatus, ttsActive)
-// States: inactive, listening, processing, speaking
-// Audio is now handled server-side — this class only drives visual UI (waiting indicator, mic button color)
-class VoiceStateMachine {
-    constructor() {
-        this.state = 'inactive';
-
-        // Input signals for the derived-state reducer
-        this._isListening = false;
-        this._waitStatusKnown = false; // true after first setWaitStatus() call in a session
-        this._lastWaitStatus = false; // last known waitStatus from server
-        this._ttsActive = false;
-    }
-
-    // --- Derived-State Reducer ---
-    // Call this after updating any input signal. It computes the desired state
-    // and transitions only if the state actually changed.
-
-    syncState() {
-        let desired;
-        if (!this._isListening) {
-            desired = 'inactive';
-        } else if (this._ttsActive) {
-            desired = 'speaking';
-        } else if (!this._waitStatusKnown) {
-            // Mic is on but we haven't received a waitStatus yet —
-            // stay silent until we know what Claude is doing
-            desired = 'inactive';
-        } else if (this._lastWaitStatus) {
-            desired = 'listening';
-        } else {
-            desired = 'processing';
-        }
-        this._transition(desired);
-    }
-
-    // Input signal setters — each updates its signal and calls syncState()
-
-    setListening(isListening) {
-        this._isListening = isListening;
-        if (isListening) {
-            // Reset server-side signals on new session to prevent stale state
-            this._lastWaitStatus = false;
-            this._waitStatusKnown = false;
-            this._ttsActive = false;
-        }
-        this.syncState();
-    }
-
-    setWaitStatus(isWaiting) {
-        this._waitStatusKnown = true;
-        this._lastWaitStatus = isWaiting;
-        this.syncState();
-    }
-
-    setTtsActive(active) {
-        this._ttsActive = active;
-        this.syncState();
-    }
-
-    // --- State Transitions (internal) ---
-
-    _transition(newState) {
-        if (newState === this.state) return;
-        this.state = newState;
-        // Audio is now handled server-side; this method only drives visual UI
-    }
-
-    // --- Lifecycle ---
-
-    destroy() {
-        this.state = 'inactive';
-    }
-}
-
 class MessengerClient {
     constructor() {
         this.baseUrl = window.location.origin;
@@ -189,6 +113,7 @@ class MessengerClient {
         this.settingsContent = document.getElementById('settingsContent');
         this.speechRateSlider = document.getElementById('speechRate');
         this.speechRateInput = document.getElementById('speechRateInput');
+        this.feedbackSoundModeSelect = document.getElementById('feedbackSoundMode');
         this.testTTSBtn = document.getElementById('testTTSBtn');
 
         // Session sidebar elements
@@ -220,8 +145,8 @@ class MessengerClient {
         this.audioPlayer = new AudioPlayer();
         this.wsConnected = false;
 
-        // Audio feedback state machine
-        this.voiceState = new VoiceStateMachine();
+        // Voice state (driven by server SSE events)
+        this.currentVoiceState = 'inactive';
 
         // Session state
         this.sessions = [];
@@ -263,9 +188,12 @@ class MessengerClient {
                     // This handles both initial connect and reconnect after server restart
                     console.log('[SSE] Connected to server, syncing voice state');
                     this.syncVoiceStateToServer();
+                } else if (data.type === 'voice-state') {
+                    // Server is the single source of truth for voice state
+                    this.currentVoiceState = data.state;
+                    this.updateVoiceStateUI(data.state);
                 } else if (data.type === 'tts-clear') {
                     this.audioPlayer.clear();
-                    this.voiceState.setTtsActive(false);
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
                 } else if (data.type === 'session-reset') {
@@ -280,10 +208,15 @@ class MessengerClient {
 
         this.eventSource.onerror = (error) => {
             console.error('SSE connection error:', error);
+            // Reset voice state to prevent stale UI while disconnected
+            this.currentVoiceState = 'inactive';
+            this.updateVoiceStateUI('inactive');
         };
     }
 
     handleWaitStatus(isWaiting) {
+        // Fallback handler for waitStatus SSE events.
+        // voice-state SSE events are now the primary driver for UI state.
         const waitingIndicator = document.getElementById('waitingIndicator');
         if (waitingIndicator) {
             const wasAtBottom = this.isUserNearBottom();
@@ -292,8 +225,33 @@ class MessengerClient {
                 this.scrollToBottom();
             }
         }
-        // Update the signal — syncState() handles the rest
-        this.voiceState.setWaitStatus(isWaiting);
+    }
+
+    updateVoiceStateUI(state) {
+        const waitingIndicator = document.getElementById('waitingIndicator');
+        if (!waitingIndicator) return;
+
+        const wasAtBottom = this.isUserNearBottom();
+
+        if (state === 'listening') {
+            waitingIndicator.textContent = 'Claude is waiting...';
+            waitingIndicator.style.display = 'block';
+        } else if (state === 'processing') {
+            waitingIndicator.textContent = 'Claude is processing...';
+            waitingIndicator.style.display = 'block';
+        } else if (state === 'speaking') {
+            waitingIndicator.textContent = 'Claude is speaking...';
+            waitingIndicator.style.display = 'block';
+        } else if (state === 'stopped') {
+            waitingIndicator.textContent = 'Claude\'s turn ended';
+            waitingIndicator.style.display = 'block';
+        } else {
+            waitingIndicator.style.display = 'none';
+        }
+
+        if (state !== 'inactive' && wasAtBottom) {
+            this.scrollToBottom();
+        }
     }
 
     initializeSessionSidebar() {
@@ -489,6 +447,16 @@ class MessengerClient {
             this.recognitionMode = savedRecognitionMode;
         }
 
+        // Load feedback sound mode
+        const VALID_FEEDBACK_MODES = ['continuous', 'once', 'off'];
+        const savedFeedbackMode = localStorage.getItem('feedbackSoundMode');
+        if (savedFeedbackMode && VALID_FEEDBACK_MODES.includes(savedFeedbackMode) && this.feedbackSoundModeSelect) {
+            this.feedbackSoundModeSelect.value = savedFeedbackMode;
+        } else if (savedFeedbackMode && !VALID_FEEDBACK_MODES.includes(savedFeedbackMode)) {
+            // Invalid stored value — clear it so default ('continuous') is used
+            localStorage.removeItem('feedbackSoundMode');
+        }
+
     }
 
     async checkServerRecognition() {
@@ -529,7 +497,7 @@ class MessengerClient {
 
     setupEventListeners() {
         window.addEventListener('beforeunload', () => {
-            this.voiceState.destroy();
+            this.currentVoiceState = 'inactive';
         });
 
         // Text input events
@@ -581,6 +549,14 @@ class MessengerClient {
                     localStorage.setItem('speechRate', this.speechRate.toString());
                     this.syncSelectedVoiceToServer();
                 }
+            });
+        }
+
+        // Feedback sound mode select
+        if (this.feedbackSoundModeSelect) {
+            this.feedbackSoundModeSelect.addEventListener('change', (e) => {
+                localStorage.setItem('feedbackSoundMode', e.target.value);
+                this.syncSelectedVoiceToServer();
             });
         }
 
@@ -817,9 +793,6 @@ class MessengerClient {
 
             // Unlock AudioPlayer on user gesture (iOS Safari requirement)
             await this.audioPlayer.unlock();
-            // Signal that we're now listening — syncState() will stay inactive (silent)
-            // until the first waitStatus event arrives from the server
-            this.voiceState.setListening(true);
 
             // Open WebSocket; audio capture starts from the onopen callback
             this.connectAudioWebSocket();
@@ -839,7 +812,6 @@ class MessengerClient {
 
     async stopVoiceDictation() {
         this.isListening = false;
-        this.voiceState.setListening(false);
         if (this.recognition) {
             this.recognition.stop();
         }
@@ -963,7 +935,7 @@ class MessengerClient {
             await fetch(`${this.baseUrl}/api/selected-voice`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ selectedVoice: 'system', speechRate: Math.round(this.speechRate * 200) })
+                body: JSON.stringify({ selectedVoice: 'system', speechRate: Math.round(this.speechRate * 200), feedbackSoundMode: this.feedbackSoundModeSelect ? this.feedbackSoundModeSelect.value : 'continuous' })
             });
         } catch (error) {
             this.debugLog('Failed to sync selected voice to server:', error);
@@ -1045,8 +1017,6 @@ class MessengerClient {
         this.audioWs.onclose = () => {
             console.log('[WS] Disconnected');
             this.wsConnected = false;
-            // TTS is no longer active if the WS drops
-            this.voiceState.setTtsActive(false);
             this.audioWs = null;
             // Reset TTS playback state and unmute mic on disconnect
             this.audioPlayer.clear();
@@ -1087,7 +1057,6 @@ class MessengerClient {
                 console.log('[WS] TTS start:', msg.audioId, 'sampleRate:', msg.sampleRate, 'kind:', msg.kind || 'tts');
                 this.audioPlayer.prepareForPlayback(msg.sampleRate, msg.audioId);
                 if (!isSfx) {
-                    this.voiceState.setTtsActive(true);
                     // Echo suppression: mute mic audio streaming during TTS playback
                     this._muteAudioCapture(true);
                 }
@@ -1098,7 +1067,6 @@ class MessengerClient {
                 this.debugLog('[WS] TTS end:', msg.audioId, 'kind:', msg.kind || 'tts');
                 this.audioPlayer.finishPlayback();
                 if (!isSfx) {
-                    this.voiceState.setTtsActive(false);
                     // Wait for actual audio playback to finish, then ack and unmute
                     // (streaming finishes faster than playback)
                     this._waitForPlaybackThenAck(msg.audioId);
@@ -1108,7 +1076,6 @@ class MessengerClient {
             case 'tts-clear':
                 this.debugLog('[WS] TTS clear');
                 this.audioPlayer.clear();
-                this.voiceState.setTtsActive(false);
                 this._muteAudioCapture(false);
                 break;
             case 'pong':

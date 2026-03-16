@@ -18,6 +18,8 @@ describe('ServerAudioState', () => {
     _chimeDelayTimer: ReturnType<typeof setTimeout> | null = null;
     transitions: string[] = []; // track transitions for assertions
     streamedSounds: string[] = []; // track sounds that would be streamed
+    feedbackSoundMode: 'once' | 'continuous' | 'off' = 'continuous';
+    soundsPlayed: string[] = []; // track sounds that would be played
 
     syncState(): void {
       let desired: typeof this.state;
@@ -65,14 +67,13 @@ describe('ServerAudioState', () => {
       this._stopPulseTimer();
       this._cancelChimeDelay();
 
-      // Simulate scheduling (we just track calls, not real timers)
-      switch (newState) {
-        case 'listening':
-          this._chimeDelayTimer = setTimeout(() => {}, 600);
-          break;
-        case 'processing':
-          this._pulseTimer = setInterval(() => {}, 5000);
-          break;
+      if (newState === 'listening' || newState === 'processing') {
+        if (this.feedbackSoundMode !== 'off') {
+          this.soundsPlayed.push(newState === 'listening' ? 'listeningPulse' : 'processingPulse');
+        }
+        if (this.feedbackSoundMode === 'continuous') {
+          this._pulseTimer = setInterval(() => {}, newState === 'listening' ? 7000 : 5000);
+        }
       }
     }
 
@@ -87,6 +88,19 @@ describe('ServerAudioState', () => {
       if (this._chimeDelayTimer !== null) {
         clearTimeout(this._chimeDelayTimer);
         this._chimeDelayTimer = null;
+      }
+    }
+
+    reapplyFeedbackMode(): void {
+      if (this.state === 'listening' || this.state === 'processing') {
+        this._stopPulseTimer();
+        // Re-run pulse logic for current state
+        if (this.feedbackSoundMode !== 'off') {
+          this.soundsPlayed.push(this.state === 'listening' ? 'listeningPulse' : 'processingPulse');
+        }
+        if (this.feedbackSoundMode === 'continuous') {
+          this._pulseTimer = setInterval(() => {}, this.state === 'listening' ? 7000 : 5000);
+        }
       }
     }
 
@@ -179,16 +193,17 @@ describe('ServerAudioState', () => {
   });
 
   describe('timer management', () => {
-    it('should cancel chime delay timer on transition away from listening', () => {
+    it('should start pulse timer on transition to listening (continuous mode)', () => {
       state.setListening(true);
       state.setWaitStatus(true);
       expect(state.state).toBe('listening');
-      expect(state._chimeDelayTimer).not.toBeNull();
+      expect(state._pulseTimer).not.toBeNull();
 
       // Transition to processing
       state.setWaitStatus(false);
       expect(state.state).toBe('processing');
-      expect(state._chimeDelayTimer).toBeNull();
+      // Pulse timer restarted for processing
+      expect(state._pulseTimer).not.toBeNull();
     });
 
     it('should cancel pulse timer on transition away from processing', () => {
@@ -222,10 +237,8 @@ describe('ServerAudioState', () => {
 
       // No leaked timers — all prior timers were cleaned up
       expect(state.state).toBe('listening');
-      // The chime delay timer should exist (from the latest listening transition)
-      expect(state._chimeDelayTimer).not.toBeNull();
-      // Pulse timer should be null (listening uses chime delay first)
-      expect(state._pulseTimer).toBeNull();
+      // In continuous mode, pulse timer should exist for listening
+      expect(state._pulseTimer).not.toBeNull();
     });
   });
 
@@ -258,6 +271,84 @@ describe('ServerAudioState', () => {
         'processing->listening',
         'listening->inactive',
       ]);
+    });
+  });
+
+  describe('feedbackSoundMode', () => {
+    it('off mode: no timers started and no sounds played on listening', () => {
+      state.feedbackSoundMode = 'off';
+      state.setListening(true);
+      state.setWaitStatus(true);
+      expect(state.state).toBe('listening');
+      expect(state._pulseTimer).toBeNull();
+      expect(state.soundsPlayed).toHaveLength(0);
+    });
+
+    it('off mode: no timers started and no sounds played on processing', () => {
+      state.feedbackSoundMode = 'off';
+      state.setListening(true);
+      state.setWaitStatus(false);
+      expect(state.state).toBe('processing');
+      expect(state._pulseTimer).toBeNull();
+      expect(state.soundsPlayed).toHaveLength(0);
+    });
+
+    it('once mode: sound played but no interval timer on listening', () => {
+      state.feedbackSoundMode = 'once';
+      state.setListening(true);
+      state.setWaitStatus(true);
+      expect(state.state).toBe('listening');
+      expect(state.soundsPlayed).toEqual(['listeningPulse']);
+      expect(state._pulseTimer).toBeNull();
+    });
+
+    it('once mode: sound played but no interval timer on processing', () => {
+      state.feedbackSoundMode = 'once';
+      state.setListening(true);
+      state.setWaitStatus(false);
+      expect(state.state).toBe('processing');
+      expect(state.soundsPlayed).toEqual(['processingPulse']);
+      expect(state._pulseTimer).toBeNull();
+    });
+
+    it('continuous mode (default): sound played and interval timer started', () => {
+      // feedbackSoundMode defaults to 'continuous'
+      state.setListening(true);
+      state.setWaitStatus(true);
+      expect(state.state).toBe('listening');
+      expect(state.soundsPlayed).toEqual(['listeningPulse']);
+      expect(state._pulseTimer).not.toBeNull();
+    });
+
+    it('reapplyFeedbackMode: switching from continuous to off mid-state stops the timer', () => {
+      state.setListening(true);
+      state.setWaitStatus(true);
+      expect(state.state).toBe('listening');
+      expect(state._pulseTimer).not.toBeNull();
+
+      state.feedbackSoundMode = 'off';
+      state.reapplyFeedbackMode();
+      expect(state._pulseTimer).toBeNull();
+    });
+
+    it('reapplyFeedbackMode: switching from off to once mid-state plays a single sound', () => {
+      state.feedbackSoundMode = 'off';
+      state.setListening(true);
+      state.setWaitStatus(true);
+      expect(state.state).toBe('listening');
+      expect(state.soundsPlayed).toHaveLength(0);
+
+      state.feedbackSoundMode = 'once';
+      state.reapplyFeedbackMode();
+      expect(state.soundsPlayed).toEqual(['listeningPulse']);
+      expect(state._pulseTimer).toBeNull();
+    });
+
+    it('reapplyFeedbackMode: does nothing when in inactive state', () => {
+      state.feedbackSoundMode = 'continuous';
+      state.reapplyFeedbackMode();
+      expect(state.soundsPlayed).toHaveLength(0);
+      expect(state._pulseTimer).toBeNull();
     });
   });
 });

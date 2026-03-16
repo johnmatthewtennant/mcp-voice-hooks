@@ -228,7 +228,8 @@ const SPEECH_RECOGNIZER_AVAILABLE = !NO_TRANSCRIBE && SpeechRecognizer.binaryExi
 let voicePreferences = {
   voiceActive: false,
   selectedVoice: 'browser' as string,  // 'system' or 'browser:N'
-  speechRate: 200 as number  // words per minute for say -o rendering
+  speechRate: 200 as number,  // words per minute for say -o rendering
+  feedbackSoundMode: 'continuous' as 'once' | 'continuous' | 'off'
 };
 
 // Render TTS to WAV file using say -o (uncompressed PCM for best quality)
@@ -378,12 +379,19 @@ class ServerAudioState {
     this.syncState();
   }
 
+  // Callback for broadcasting state changes to SSE clients.
+  // Set after ttsClients is initialised (see broadcastVoiceState helper).
+  onStateChange: ((state: string) => void) | null = null;
+
   private _transition(newState: typeof this.state): void {
     const oldState = this.state;
     this.state = newState;
     this._stopPulseTimer();
 
     debugLog(`[ServerAudio] ${oldState} -> ${newState}`);
+
+    // Broadcast state to browser clients
+    this.onStateChange?.(newState);
 
     switch (newState) {
       case 'inactive':
@@ -404,25 +412,39 @@ class ServerAudioState {
   }
 
   private _startPulseTimer(type: 'listening' | 'processing'): void {
-    const interval = type === 'listening' ? 7000 : 5000;
+    const mode = voicePreferences.feedbackSoundMode;
+    if (mode === 'off') return;
+
     const soundKey = type === 'listening' ? 'listeningPulse' : 'processingPulse';
 
     // Play first pulse immediately
     this._streamSound(soundKey);
 
-    this._pulseTimer = setInterval(() => {
-      if (this.state !== type) {
-        this._stopPulseTimer();
-        return;
-      }
-      this._streamSound(soundKey);
-    }, interval);
+    if (mode === 'continuous') {
+      const interval = type === 'listening' ? 7000 : 5000;
+      this._pulseTimer = setInterval(() => {
+        if (this.state !== type) {
+          this._stopPulseTimer();
+          return;
+        }
+        this._streamSound(soundKey);
+      }, interval);
+    }
+    // 'once' mode: first pulse already played, no interval needed
   }
 
   private _stopPulseTimer(): void {
     if (this._pulseTimer !== null) {
       clearInterval(this._pulseTimer);
       this._pulseTimer = null;
+    }
+  }
+
+  reapplyFeedbackMode(): void {
+    // Only relevant if currently in a state that plays sounds
+    if (this.state === 'listening' || this.state === 'processing') {
+      this._stopPulseTimer();
+      this._startPulseTimer(this.state);
     }
   }
 
@@ -1056,6 +1078,13 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   }
 
   const result = await handleHookRequest('stop', session);
+
+  // Broadcast "stopped" state when the stop hook truly approves
+  // (no utterances delivered back — Claude's turn is ending)
+  if (result.decision === 'approve') {
+    broadcastVoiceState('stopped');
+  }
+
   res.json(result);
 });
 
@@ -1172,6 +1201,17 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
   // Send initial connection message
   res.write('data: {"type":"connected"}\n\n');
 
+  // Send current voice state so browser starts with correct UI.
+  // Clients watching a different session get 'inactive'.
+  const initialState = (sessionKey === null || sessionKey === activeCompositeKey)
+    ? serverAudioState.state
+    : 'inactive';
+  res.write(`data: ${JSON.stringify({
+    type: 'voice-state',
+    state: initialState,
+    sessionKey: activeCompositeKey
+  })}\n\n`);
+
   // Add client to map
   ttsClients.set(res, sessionKey);
   debugLog(`[SSE] Client connected: session=${sessionKey || 'active'}`);
@@ -1242,6 +1282,23 @@ function notifyWaitStatus(isWaiting: boolean) {
   // Drive server-side audio state
   serverAudioState.setWaitStatus(isWaiting);
 }
+
+// Broadcast voice state to SSE clients viewing the active session
+function broadcastVoiceState(state: string): void {
+  const message = JSON.stringify({
+    type: 'voice-state',
+    state,
+    sessionKey: activeCompositeKey
+  });
+  ttsClients.forEach((viewingKey, client) => {
+    if (viewingKey === null || viewingKey === activeCompositeKey) {
+      client.write(`data: ${message}\n\n`);
+    }
+  });
+}
+
+// Wire up the ServerAudioState callback now that ttsClients exists
+serverAudioState.onStateChange = broadcastVoiceState;
 
 
 // ── WebSocket audio endpoint ──────────────────────────────────────────
@@ -1753,7 +1810,7 @@ app.post('/api/test-voice', async (req: Request, res: Response) => {
 
 // Set selected voice preference (browser syncs this on voice dropdown change)
 app.post('/api/selected-voice', (req: Request, res: Response) => {
-  const { selectedVoice, speechRate } = req.body;
+  const { selectedVoice, speechRate, feedbackSoundMode } = req.body;
 
   if (!selectedVoice || typeof selectedVoice !== 'string') {
     res.status(400).json({ error: 'selectedVoice is required' });
@@ -1764,8 +1821,13 @@ app.post('/api/selected-voice', (req: Request, res: Response) => {
   if (typeof speechRate === 'number' && speechRate > 0) {
     voicePreferences.speechRate = Math.max(50, Math.min(500, Math.round(speechRate)));
   }
-  debugLog(`[Voice] Selected voice: ${selectedVoice}, rate: ${voicePreferences.speechRate}`);
-  res.json({ success: true, selectedVoice, speechRate: voicePreferences.speechRate });
+  const VALID_FEEDBACK_MODES = new Set(['once', 'continuous', 'off']);
+  if (typeof feedbackSoundMode === 'string' && VALID_FEEDBACK_MODES.has(feedbackSoundMode)) {
+    voicePreferences.feedbackSoundMode = feedbackSoundMode as 'once' | 'continuous' | 'off';
+    serverAudioState.reapplyFeedbackMode();
+  }
+  debugLog(`[Voice] Selected voice: ${selectedVoice}, rate: ${voicePreferences.speechRate}, feedbackSoundMode: ${voicePreferences.feedbackSoundMode}`);
+  res.json({ success: true, selectedVoice, speechRate: voicePreferences.speechRate, feedbackSoundMode: voicePreferences.feedbackSoundMode });
 });
 
 // UI Routing
