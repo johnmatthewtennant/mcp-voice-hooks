@@ -60,3 +60,4 @@ CLAUDE.local.md
 # Swift build artifacts
 .build/
 thoughts/
+swift/speech-recognizer/.build/
