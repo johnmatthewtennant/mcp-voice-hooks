@@ -2053,6 +2053,7 @@ if (IS_MCP_MANAGED) {
       capabilities: {
         tools: {},
       },
+      instructions: 'When voice input and output are active: (1) Delegate tasks to teammates when available (team_name: new_or_existing_team_name). Resume idle teammates with SendMessage. If a teammate has shut down, use the Agent tool with the resume parameter to restart it. (2) If the teammate functionality is disabled, use background agents instead (run_in_background: true). (3) Keep your own turns short to stay responsive to voice input.',
     }
   );
 
