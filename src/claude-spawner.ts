@@ -19,6 +19,8 @@ interface SpawnOptions {
   prompt: string;
   /** Working directory for the Claude process */
   cwd?: string;
+  /** Callback invoked if the spawned process errors or exits early (e.g. bad cwd, missing binary) */
+  onSpawnError?: (error: Error | string) => void;
 }
 
 interface SpawnResult {
@@ -45,7 +47,7 @@ const managedProcesses = new Map<string, ChildProcess>();
  * from the managed process map automatically.
  */
 export function spawnClaudeResume(options: SpawnOptions): SpawnResult {
-  const { sessionId, prompt, cwd } = options;
+  const { sessionId, prompt, cwd, onSpawnError } = options;
 
   // Prevent double-spawning for the same session
   const existing = managedProcesses.get(sessionId);
@@ -87,6 +89,7 @@ export function spawnClaudeResume(options: SpawnOptions): SpawnResult {
   child.on('error', (err) => {
     debugLog(`[Spawner] [${sessionId}] error: ${err.message}`);
     managedProcesses.delete(sessionId);
+    onSpawnError?.(err);
   });
 
   debugLog(`[Spawner] Spawned pid=${child.pid} for session=${sessionId}`);

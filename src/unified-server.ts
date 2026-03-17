@@ -198,6 +198,20 @@ class UtteranceQueue {
     }
   }
 
+  markPending(id: string): void {
+    const utterance = this.utterances.find(u => u.id === id);
+    if (utterance && utterance.status === 'delivered') {
+      utterance.status = 'pending';
+      debugLog(`[Queue] reverted to pending: "${utterance.text}"	[id: ${id}]`);
+
+      // Sync status in messages array
+      const message = this.messages.find(m => m.id === id && m.role === 'user');
+      if (message) {
+        message.status = 'pending';
+      }
+    }
+  }
+
   delete(id: string): boolean {
     const utterance = this.utterances.find(u => u.id === id);
 
@@ -674,12 +688,18 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
 
       if (pendingUtterances.length > 0) {
         const prompt = pendingUtterances.map(u => u.text).join('\n\n');
+        const utteranceIds = pendingUtterances.map(u => u.id);
         pendingUtterances.forEach(u => session.queue.markDelivered(u.id));
 
         spawnClaudeResume({
           sessionId: session.sessionId,
           prompt,
           cwd: session.managedCwd || undefined,
+          onSpawnError: () => {
+            // Revert utterances to pending so they can be re-delivered
+            utteranceIds.forEach(id => session.queue.markPending(id));
+            debugLog(`[AutoSpawn] Reverted ${utteranceIds.length} utterance(s) to pending after spawn error`);
+          },
         });
 
         session.managed = true;
@@ -1814,6 +1834,21 @@ app.post('/api/active-session', (req: Request, res: Response) => {
  */
 app.post('/api/session/new', (req: Request, res: Response) => {
   const { cwd: workingDir } = req.body;
+
+  // Validate cwd if provided
+  if (workingDir) {
+    try {
+      const stats = fs.statSync(workingDir);
+      if (!stats.isDirectory()) {
+        res.status(400).json({ error: `Path is not a directory: ${workingDir}` });
+        return;
+      }
+    } catch {
+      res.status(400).json({ error: `Directory does not exist: ${workingDir}` });
+      return;
+    }
+  }
+
   const sessionId = randomUUID();
   const key = compositeKey(sessionId);
   const session = getOrCreateSession(key, sessionId);
@@ -1876,6 +1911,7 @@ app.post('/api/session/spawn', (req: Request, res: Response) => {
   }
 
   const prompt = pendingUtterances.map(u => u.text).join('\n\n');
+  const utteranceIds = pendingUtterances.map(u => u.id);
 
   // Mark utterances as delivered since they're being sent as the prompt
   pendingUtterances.forEach(u => {
@@ -1887,6 +1923,11 @@ app.post('/api/session/spawn', (req: Request, res: Response) => {
       sessionId: session.sessionId,
       prompt,
       cwd: session.managedCwd || undefined,
+      onSpawnError: () => {
+        // Revert utterances to pending so they can be re-delivered
+        utteranceIds.forEach(id => session.queue.markPending(id));
+        debugLog(`[Session] Reverted ${utteranceIds.length} utterance(s) to pending after spawn error`);
+      },
     });
 
     session.managed = true;
