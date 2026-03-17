@@ -679,6 +679,97 @@
             background: rgba(255, 255, 255, 0.3);
         }
 
+        .new-session-control {
+            padding: 8px;
+            border-bottom: 1px solid #E5E5E5;
+        }
+
+        .new-session-btn {
+            width: 100%;
+            padding: 8px 12px;
+            background: #007AFF;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .new-session-btn:hover {
+            background: #0056CC;
+        }
+
+        .new-session-form {
+            margin-top: 8px;
+        }
+
+        .new-session-cwd {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #CCC;
+            border-radius: 4px;
+            font-size: 12px;
+            box-sizing: border-box;
+            margin-bottom: 6px;
+        }
+
+        .new-session-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .new-session-create-btn {
+            flex: 1;
+            padding: 6px;
+            background: #34C759;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .new-session-create-btn:hover {
+            background: #2DA44E;
+        }
+
+        .new-session-cancel-btn {
+            flex: 1;
+            padding: 6px;
+            background: #E5E5E5;
+            color: #333;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .new-session-cancel-btn:hover {
+            background: #D0D0D0;
+        }
+
+        .session-item .session-status {
+            font-size: 10px;
+            margin-left: 4px;
+            opacity: 0.7;
+        }
+
+        .session-item .managed-badge {
+            font-size: 9px;
+            background: #34C759;
+            color: white;
+            padding: 1px 4px;
+            border-radius: 3px;
+            margin-left: 4px;
+            flex-shrink: 0;
+        }
+
+        .session-item.active .managed-badge {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
         /* Floating sidebar toggle button (top-left, when sidebar is collapsed) */
         .sidebar-open-btn {
             position: fixed;
@@ -888,6 +979,16 @@
                     <input type="checkbox" id="backgroundEnforcementToggle">
                     <span class="toggle-slider"></span>
                 </label>
+            </div>
+            <div class="new-session-control">
+                <button id="newSessionBtn" class="new-session-btn" title="Start a new managed Claude session">+ New Session</button>
+                <div id="newSessionForm" class="new-session-form" style="display: none;">
+                    <input type="text" id="newSessionCwd" class="new-session-cwd" placeholder="Working directory (optional)" />
+                    <div class="new-session-actions">
+                        <button id="newSessionCreate" class="new-session-create-btn">Create</button>
+                        <button id="newSessionCancel" class="new-session-cancel-btn">Cancel</button>
+                    </div>
+                </div>
             </div>
             <div id="sessionList" class="session-list">
                 <div style="padding: 16px; color: #999; font-size: 13px; text-align: center;">

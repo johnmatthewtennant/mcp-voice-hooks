@@ -16,6 +16,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
 import { SpeechRecognizer } from './speech-recognition.js';
+import { spawnClaudeResume, isSessionProcessRunning, killAllManagedProcesses } from './claude-spawner.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
@@ -325,9 +326,9 @@ function cleanupSounds(): void {
   }
 }
 // Register cleanup on process exit
-process.on('exit', cleanupSounds);
-process.on('SIGINT', () => { cleanupSounds(); process.exit(0); });
-process.on('SIGTERM', () => { cleanupSounds(); process.exit(0); });
+process.on('exit', () => { cleanupSounds(); killAllManagedProcesses(); });
+process.on('SIGINT', () => { cleanupSounds(); killAllManagedProcesses(); process.exit(0); });
+process.on('SIGTERM', () => { cleanupSounds(); killAllManagedProcesses(); process.exit(0); });
 
 // Server-side audio state machine — mirrors browser VoiceStateMachine logic
 // but plays sounds by streaming pre-rendered WAV files over WebSocket
@@ -517,6 +518,10 @@ interface SessionState {
   lastToolUseTimestamp: Date | null;
   lastSpeakTimestamp: Date | null;
   lastActivity: Date;
+  /** Whether this session was started from the browser (managed) vs terminal (unmanaged) */
+  managed: boolean;
+  /** Working directory for managed sessions */
+  managedCwd: string | null;
 }
 
 const sessions = new Map<string, SessionState>();
@@ -536,6 +541,8 @@ function getOrCreateSession(key: string, sessionId?: string, agentId?: string | 
       lastToolUseTimestamp: null,
       lastSpeakTimestamp: null,
       lastActivity: new Date(),
+      managed: false,
+      managedCwd: null,
     };
     sessions.set(key, session);
     debugLog(`[Session] Created: key=${key} session=${sessionId || 'default'} agent=${agentId || 'main'} type=${agentType || 'none'}`);
@@ -653,14 +660,46 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
   const session = getActiveSessionOrFirst();
   const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
   const utterance = session.queue.add(text, parsedTimestamp);
+
+  // Auto-spawn: if Claude is inactive (stopped state) and this is a real session,
+  // spawn Claude with --resume to deliver the message.
+  let spawned = false;
+  if (session.sessionId !== 'default' && serverAudioState.state === 'inactive' &&
+      !isSessionProcessRunning(session.sessionId)) {
+    try {
+      // Collect all pending utterances (including the one just added)
+      const pendingUtterances = session.queue.utterances
+        .filter(u => u.status === 'pending')
+        .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      if (pendingUtterances.length > 0) {
+        const prompt = pendingUtterances.map(u => u.text).join('\n\n');
+        pendingUtterances.forEach(u => session.queue.markDelivered(u.id));
+
+        spawnClaudeResume({
+          sessionId: session.sessionId,
+          prompt,
+          cwd: session.managedCwd || undefined,
+        });
+
+        session.managed = true;
+        spawned = true;
+        debugLog(`[AutoSpawn] Spawned Claude for inactive session=${session.sessionId} with ${pendingUtterances.length} utterance(s)`);
+      }
+    } catch (error) {
+      debugLog(`[AutoSpawn] Failed to spawn: ${error}`);
+    }
+  }
+
   res.json({
     success: true,
     utterance: {
       id: utterance.id,
       text: utterance.text,
       timestamp: utterance.timestamp,
-      status: utterance.status,
+      status: spawned ? 'delivered' : utterance.status,
     },
+    spawned,
   });
 });
 
@@ -1737,6 +1776,9 @@ app.get('/api/sessions', (_req: Request, res: Response) => {
     utteranceCount: s.queue.utterances.length,
     messageCount: s.queue.messages.length,
     pendingCount: s.queue.utterances.filter(u => u.status === 'pending').length,
+    managed: s.managed,
+    managedCwd: s.managedCwd,
+    processRunning: s.sessionId !== 'default' ? isSessionProcessRunning(s.sessionId) : false,
   }));
 
   res.json({
@@ -1761,6 +1803,104 @@ app.post('/api/active-session', (req: Request, res: Response) => {
     success: true,
     activeKey: activeCompositeKey,
   });
+});
+
+// ── Session spawn endpoints (Phase 0: Direct Session Management) ─────────
+
+/**
+ * Start a new managed Claude session.
+ * Creates a fresh session with a new UUID, optionally in a given working directory.
+ * The session is not spawned until a message is sent to it.
+ */
+app.post('/api/session/new', (req: Request, res: Response) => {
+  const { cwd: workingDir } = req.body;
+  const sessionId = randomUUID();
+  const key = compositeKey(sessionId);
+  const session = getOrCreateSession(key, sessionId);
+  session.managed = true;
+  session.managedCwd = workingDir || null;
+
+  // Set as active session
+  activeCompositeKey = key;
+  debugLog(`[Session] New managed session created: id=${sessionId} cwd=${workingDir || '(default)'}`);
+
+  // Notify browser of session change
+  notifySessionReset();
+
+  res.json({
+    success: true,
+    sessionId,
+    key,
+    managed: true,
+    cwd: session.managedCwd,
+  });
+});
+
+/**
+ * Spawn Claude for an inactive session.
+ * Takes a session key and spawns `claude -p --resume <sessionId>` with pending utterances.
+ */
+app.post('/api/session/spawn', (req: Request, res: Response) => {
+  const { sessionKey } = req.body;
+
+  if (!sessionKey) {
+    res.status(400).json({ error: 'sessionKey is required' });
+    return;
+  }
+
+  const session = sessions.get(sessionKey);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  if (session.sessionId === 'default') {
+    res.status(400).json({ error: 'Cannot spawn Claude for the default session. Send a message from Claude Code first to establish a session.' });
+    return;
+  }
+
+  // Check if already running
+  if (isSessionProcessRunning(session.sessionId)) {
+    res.json({ success: true, alreadyRunning: true, sessionId: session.sessionId });
+    return;
+  }
+
+  // Collect pending utterances as the prompt
+  const pendingUtterances = session.queue.utterances
+    .filter(u => u.status === 'pending')
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+  if (pendingUtterances.length === 0) {
+    res.status(400).json({ error: 'No pending messages to send. Add a message first.' });
+    return;
+  }
+
+  const prompt = pendingUtterances.map(u => u.text).join('\n\n');
+
+  // Mark utterances as delivered since they're being sent as the prompt
+  pendingUtterances.forEach(u => {
+    session.queue.markDelivered(u.id);
+  });
+
+  try {
+    spawnClaudeResume({
+      sessionId: session.sessionId,
+      prompt,
+      cwd: session.managedCwd || undefined,
+    });
+
+    session.managed = true;
+    debugLog(`[Session] Spawned Claude for session=${session.sessionId} with ${pendingUtterances.length} utterance(s)`);
+
+    res.json({
+      success: true,
+      sessionId: session.sessionId,
+      utterancesDelivered: pendingUtterances.length,
+    });
+  } catch (error) {
+    debugLog(`[Session] Spawn failed: ${error}`);
+    res.status(500).json({ error: `Failed to spawn Claude: ${error}` });
+  }
 });
 
 // API for text-to-speech
