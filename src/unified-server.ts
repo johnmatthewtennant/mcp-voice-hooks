@@ -63,11 +63,18 @@ function waitForTtsAck(audioId: string): Promise<void> {
 }
 
 async function processTtsQueue() {
-  if (ttsPlaying || ttsQueue.length === 0) return;
+  if (ttsPlaying || ttsQueue.length === 0 || serverAudioState.isUserSpeaking) return;
   ttsPlaying = true;
   const item = ttsQueue.shift()!;
   try {
     const { audioId, filePath } = await renderTtsToFile(item.text, item.rate);
+    // If user started speaking during render, re-enqueue and defer
+    if (serverAudioState.isUserSpeaking) {
+      debugLog(`[TTS] User started speaking during render — re-enqueueing`);
+      ttsQueue.unshift(item);
+      ttsPlaying = false;
+      return;
+    }
     // Check if a WS client is connected for this session — prefer WS delivery
     const targetKey = item.sessionKey || activeCompositeKey;
     const wsClient = findWsClientForSession(targetKey);
@@ -339,6 +346,9 @@ class ServerAudioState {
   private _lastWaitStatus = false;
   private _ttsActive = false;
   private _hookActive = false;
+  private _userSpeaking = false;
+  private _userSpeakingDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private _userSpeakingSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private _pulseTimer: ReturnType<typeof setInterval> | null = null;
 
   syncState(): void {
@@ -394,6 +404,63 @@ class ServerAudioState {
   setTtsActive(active: boolean): void {
     this._ttsActive = active;
     this.syncState();
+  }
+
+  get isUserSpeaking(): boolean {
+    return this._userSpeaking;
+  }
+
+  setUserSpeaking(active: boolean): void {
+    // Clear any pending debounce timer
+    if (this._userSpeakingDebounceTimer) {
+      clearTimeout(this._userSpeakingDebounceTimer);
+      this._userSpeakingDebounceTimer = null;
+    }
+
+    if (active) {
+      // User started speaking — set immediately
+      if (!this._userSpeaking) {
+        debugLog('[ServerAudio] userSpeaking = true');
+      }
+      this._userSpeaking = true;
+      // Reset silence timeout (2 seconds from last speech activity)
+      this._resetSilenceTimeout();
+    } else {
+      // User stopped speaking — debounce 300ms to absorb gaps between words
+      this._userSpeakingDebounceTimer = setTimeout(() => {
+        this._userSpeakingDebounceTimer = null;
+        if (this._userSpeaking) {
+          debugLog('[ServerAudio] userSpeaking = false (debounced)');
+          this._userSpeaking = false;
+          this._clearSilenceTimeout();
+          // Resume TTS queue now that user has stopped speaking
+          processTtsQueue();
+        }
+      }, 300);
+    }
+    this.syncState();
+  }
+
+  private _resetSilenceTimeout(): void {
+    this._clearSilenceTimeout();
+    // If no transcript events arrive within 2 seconds, assume user stopped speaking
+    this._userSpeakingSilenceTimer = setTimeout(() => {
+      this._userSpeakingSilenceTimer = null;
+      if (this._userSpeaking) {
+        debugLog('[ServerAudio] userSpeaking = false (silence timeout)');
+        this._userSpeaking = false;
+        this.syncState();
+        // Resume TTS queue
+        processTtsQueue();
+      }
+    }, 2000);
+  }
+
+  private _clearSilenceTimeout(): void {
+    if (this._userSpeakingSilenceTimer) {
+      clearTimeout(this._userSpeakingSilenceTimer);
+      this._userSpeakingSilenceTimer = null;
+    }
   }
 
   // Callback for broadcasting state changes to SSE clients.
@@ -1522,6 +1589,14 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       break;
     }
 
+    case 'user-speaking-start':
+      serverAudioState.setUserSpeaking(true);
+      break;
+
+    case 'user-speaking-stop':
+      serverAudioState.setUserSpeaking(false);
+      break;
+
     case 'ping':
       client.ws.send(JSON.stringify({ type: 'pong' }));
       break;
@@ -1546,11 +1621,15 @@ function startRecognizerForClient(client: WsAudioClient): void {
     if (client.ws.readyState !== WebSocket.OPEN) return;
 
     if (result.type === 'interim') {
+      // Signal that user is speaking — blocks TTS queue processing
+      serverAudioState.setUserSpeaking(true);
       client.ws.send(JSON.stringify({
         type: 'transcript-interim',
         text: result.text,
       }));
     } else if (result.type === 'final' && result.text.trim()) {
+      // User finished speaking — release TTS block after debounce
+      serverAudioState.setUserSpeaking(false);
       const utteranceId = randomUUID();
       // Create utterance in the selected session (from WS client), falling back to active
       const selectedKey = (client as any).selectedSessionKey;
