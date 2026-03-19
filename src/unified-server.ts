@@ -1173,11 +1173,12 @@ function registerIfFirst(key: string): void {
       activeCompositeKey = key;
       debugLog(`[Session] Active upgraded from default → ${key}`);
     } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
-      // Different session_id — check if it's a managed/child session before switching
+      // Different session_id — check if it's a subagent or managed/child session before switching
       const incomingSession = sessions.get(key);
-      if (incomingSession?.managed) {
-        // Managed session hooks should NOT steal focus from the active session
-        debugLog(`[Session] Managed session hook ignored for active switch: ${key} (active stays ${activeCompositeKey})`);
+      const isSubagent = incomingSession?.agentId && incomingSession.agentId !== 'main';
+      if (isSubagent || incomingSession?.managed) {
+        // Subagent and managed session hooks should NOT steal focus from the active session
+        debugLog(`[Session] ${isSubagent ? 'Subagent' : 'Managed session'} hook ignored for active switch: ${key} (active stays ${activeCompositeKey})`);
       } else {
         // New Claude instance (restart or new project) — switch active
         const oldKey = activeCompositeKey;
