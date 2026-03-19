@@ -558,6 +558,15 @@ function getActiveSession(): SessionState | null {
   return null;
 }
 
+// Resolve session from a browser request — uses explicit session key if provided, otherwise active/first
+function getSessionFromRequest(req: Request): SessionState {
+  const sessionKey = (req.query?.session as string) || (req.body?.session as string);
+  if (sessionKey && sessions.has(sessionKey)) {
+    return sessions.get(sessionKey)!;
+  }
+  return getActiveSessionOrFirst();
+}
+
 // Get active session or return a 404-like response for browser endpoints
 function getActiveSessionOrFirst(): SessionState {
   const active = getActiveSession();
@@ -650,7 +659,7 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
     return;
   }
 
-  const session = getActiveSessionOrFirst();
+  const session = getSessionFromRequest(req);
   const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
   const utterance = session.queue.add(text, parsedTimestamp);
   res.json({
@@ -666,7 +675,7 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
 
 app.get('/api/utterances', (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 10;
-  const session = getActiveSessionOrFirst();
+  const session = getSessionFromRequest(req);
   const utterances = session.queue.getRecent(limit);
 
   res.json({
@@ -682,7 +691,7 @@ app.get('/api/utterances', (req: Request, res: Response) => {
 // GET /api/conversation - Returns full conversation history
 app.get('/api/conversation', (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 50;
-  const session = getActiveSessionOrFirst();
+  const session = getSessionFromRequest(req);
   const messages = session.queue.getRecentMessages(limit);
 
   res.json({
@@ -1082,16 +1091,22 @@ function registerIfFirst(key: string): void {
       activeCompositeKey = key;
       debugLog(`[Session] Active upgraded from default → ${key}`);
     } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
-      // Different session_id means a new Claude instance (restart or new project).
-      // Always switch active to the new session and reset voice state.
-      // The browser will re-sync via the session-reset SSE event.
-      const oldKey = activeCompositeKey;
-      activeCompositeKey = key;
-      debugLog(`[Session] New Claude session detected: ${oldKey} → ${key}`);
-      setVoiceActive(false);
-      serverAudioState.clearHookActiveSilent(); // Clear stale hook state from previous session
-      debugLog(`[Session] Voice state reset for new session`);
-      notifySessionReset();
+      // Different session_id — only switch if it's NOT a subagent of the current session
+      const incomingSession = sessions.get(key);
+      const isSubagent = incomingSession?.agentId && incomingSession.agentId !== 'main';
+      if (isSubagent) {
+        // Subagent sessions should NOT steal focus from the lead session
+        debugLog(`[Session] Subagent hook ignored for active switch: ${key} (active stays ${activeCompositeKey})`);
+      } else {
+        // New Claude instance (restart or new project) — switch active
+        const oldKey = activeCompositeKey;
+        activeCompositeKey = key;
+        debugLog(`[Session] New Claude session detected: ${oldKey} → ${key}`);
+        setVoiceActive(false);
+        serverAudioState.clearHookActiveSilent();
+        debugLog(`[Session] Voice state reset for new session`);
+        notifySessionReset();
+      }
     }
   }
 }
@@ -1515,6 +1530,11 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       client.ws.send(JSON.stringify({ type: 'pong' }));
       break;
 
+    case 'select-session':
+      (client as any).selectedSessionKey = msg.sessionKey;
+      debugLog(`[WS] Client selected session: ${msg.sessionKey}`);
+      break;
+
     default:
       debugLog(`[WS] Unknown message type: ${msg.type}`);
       break;
@@ -1536,8 +1556,9 @@ function startRecognizerForClient(client: WsAudioClient): void {
       }));
     } else if (result.type === 'final' && result.text.trim()) {
       const utteranceId = randomUUID();
-      // Create utterance directly in the server queue (no browser round-trip)
-      const session = getActiveSessionOrFirst();
+      // Create utterance in the selected session (from WS client), falling back to active
+      const selectedKey = (client as any).selectedSessionKey;
+      const session = selectedKey && sessions.has(selectedKey) ? sessions.get(selectedKey)! : getActiveSessionOrFirst();
       session.queue.add(result.text.trim());
 
       client.ws.send(JSON.stringify({
