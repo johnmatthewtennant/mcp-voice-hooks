@@ -1029,8 +1029,25 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
     return { decision: 'approve' };
   }
 
-  // 4. Handle speak
+  // 4. Handle speak — block while user is speaking
   if (attemptedAction === 'speak') {
+    if (serverAudioState.isUserSpeaking) {
+      return (async () => {
+        debugLog('[Pre-Speak Hook] User is speaking — waiting for silence before approving speak...');
+        const POLL_INTERVAL_MS = 100;
+        const MAX_WAIT_MS = 10000; // 10 second safety timeout
+        const startTime = Date.now();
+        while (serverAudioState.isUserSpeaking && (Date.now() - startTime) < MAX_WAIT_MS) {
+          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+        }
+        if (serverAudioState.isUserSpeaking) {
+          debugLog('[Pre-Speak Hook] Timed out waiting for user to stop speaking — approving anyway');
+        } else {
+          debugLog(`[Pre-Speak Hook] User stopped speaking after ${Date.now() - startTime}ms — approving speak`);
+        }
+        return { decision: 'approve' as const };
+      })();
+    }
     return { decision: 'approve' };
   }
 
@@ -1224,7 +1241,7 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
 });
 
 // Pre-speak hook endpoint
-app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
+app.post('/api/hooks/pre-speak', async (req: Request, res: Response) => {
   logHookRequest(req, 'pre-speak');
   const { key, session } = parseHookRequest(req);
   registerIfFirst(key);
@@ -1233,9 +1250,9 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
 
   // Active session: approve and whitelist the text
   if (isActiveKey(key)) {
-    const result = handleHookRequest('speak', session);
+    const result = await handleHookRequest('speak', session);
     // If approved and we have text, add to whitelist
-    if (speakText && (result as any).decision !== 'block') {
+    if (speakText && result.decision !== 'block') {
       addToWhitelist(speakText, key);
     }
     res.json(result);
