@@ -157,7 +157,8 @@ class MessengerClient {
 
         // Session state
         this.sessions = [];
-        this.activeSessionKey = null;
+        this.activeSessionKey = null;       // Server's active key (for hooks/TTS routing)
+        this.selectedSessionKey = null;     // User's UI selection (which tab they're viewing)
         this.unreadCounts = {}; // key → count of messages since last viewed
 
         // Initialize
@@ -274,7 +275,7 @@ class MessengerClient {
                 const item = e.target.closest('.session-item');
                 if (!item) return;
                 const key = item.dataset.sessionKey;
-                if (key && key !== this.activeSessionKey) {
+                if (key && key !== this.selectedSessionKey) {
                     this.switchActiveSession(key);
                 }
             });
@@ -336,6 +337,10 @@ class MessengerClient {
             const data = await response.json();
             this.sessions = data.sessions || [];
             this.activeSessionKey = data.activeKey;
+            // Set initial selection to active key, but never override user's choice
+            if (!this.selectedSessionKey) {
+                this.selectedSessionKey = data.activeKey;
+            }
 
             // Show sidebar button when there are multiple sessions
             const hasMultipleSessions = this.sessions.length > 1;
@@ -395,7 +400,7 @@ class MessengerClient {
             });
 
             for (const session of members) {
-                const isActive = session.key === this.activeSessionKey;
+                const isActive = session.key === this.selectedSessionKey;
                 const isSubAgent = !!session.agentId;
                 const label = isSubAgent
                     ? (session.agentType || session.agentId || 'sub-agent')
@@ -438,26 +443,19 @@ class MessengerClient {
         return div.innerHTML;
     }
 
-    async switchActiveSession(key) {
-        try {
-            const response = await fetch(`${this.baseUrl}/api/active-session`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key }),
-            });
-            if (response.ok) {
-                this.activeSessionKey = key;
-                // Clear unread for this session
-                delete this.unreadCounts[key];
-                // Clear existing messages so the new session's messages replace them
-                this.conversationMessages.querySelectorAll('.message-bubble').forEach(el => el.remove());
-                // Reload conversation for new active session
-                this.loadData();
-                this.loadSessions();
-            }
-        } catch (error) {
-            console.error('Failed to switch session:', error);
+    switchActiveSession(key) {
+        this.selectedSessionKey = key;
+        // Notify server-side speech recognition which session to target
+        if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
+            this.audioWs.send(JSON.stringify({ type: 'select-session', sessionKey: key }));
         }
+        // Clear unread for this session
+        delete this.unreadCounts[key];
+        // Clear existing messages so the new session's messages replace them
+        this.conversationMessages.querySelectorAll('.message-bubble').forEach(el => el.remove());
+        // Reload conversation for selected session
+        this.loadData();
+        this.renderSessionList();
     }
 
     async createNewSession() {
@@ -633,7 +631,8 @@ class MessengerClient {
     async loadData() {
         try {
             // Load full conversation
-            const conversationResponse = await fetch(`${this.baseUrl}/api/conversation?limit=50`);
+            const sessionParam = this.selectedSessionKey ? `&session=${encodeURIComponent(this.selectedSessionKey)}` : '';
+            const conversationResponse = await fetch(`${this.baseUrl}/api/conversation?limit=50${sessionParam}`);
             if (conversationResponse.ok) {
                 const data = await conversationResponse.json();
                 this.updateConversation(data.messages);
@@ -815,7 +814,7 @@ class MessengerClient {
             const response = await fetch(`${this.baseUrl}/api/potential-utterances`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text, timestamp: new Date().toISOString() })
+                body: JSON.stringify({ text, timestamp: new Date().toISOString(), session: this.selectedSessionKey })
             });
 
             if (response.ok) {

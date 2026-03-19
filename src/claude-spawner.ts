@@ -13,12 +13,16 @@ import { spawn, type ChildProcess } from 'child_process';
 import { debugLog } from './debug.js';
 
 interface SpawnOptions {
-  /** Claude session ID to resume */
+  /** Claude session ID to resume (omit for new sessions) */
   sessionId: string;
   /** Initial prompt / message to send */
   prompt: string;
   /** Working directory for the Claude process */
   cwd?: string;
+  /** If true, start a new session instead of resuming */
+  newSession?: boolean;
+  /** Callback invoked when stdout data arrives (for relaying responses) */
+  onStdout?: (text: string) => void;
   /** Callback invoked if the spawned process errors or exits early (e.g. bad cwd, missing binary) */
   onSpawnError?: (error: Error | string) => void;
 }
@@ -47,7 +51,7 @@ const managedProcesses = new Map<string, ChildProcess>();
  * from the managed process map automatically.
  */
 export function spawnClaudeResume(options: SpawnOptions): SpawnResult {
-  const { sessionId, prompt, cwd, onSpawnError } = options;
+  const { sessionId, prompt, cwd, newSession, onSpawnError } = options;
 
   // Prevent double-spawning for the same session
   const existing = managedProcesses.get(sessionId);
@@ -56,12 +60,15 @@ export function spawnClaudeResume(options: SpawnOptions): SpawnResult {
     return { process: existing, sessionId };
   }
 
-  const args = [
-    '-p',
-    '--resume', sessionId,
-    '--dangerously-skip-permissions',
-    prompt,
-  ];
+  const args = ['-p'];
+  if (newSession) {
+    // First spawn: use --session-id so the session file matches our server-side UUID
+    args.push('--session-id', sessionId);
+  } else {
+    // Subsequent spawns: resume the existing session
+    args.push('--resume', sessionId);
+  }
+  args.push('--dangerously-skip-permissions', prompt);
 
   debugLog(`[Spawner] Spawning: claude ${args.join(' ')}`);
 
@@ -69,12 +76,24 @@ export function spawnClaudeResume(options: SpawnOptions): SpawnResult {
     cwd: cwd || process.cwd(),
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
+    env: { ...process.env, MCP_VOICE_HOOKS_CHILD: 'true', MCP_VOICE_HOOKS_PORT: String(process.env.MCP_VOICE_HOOKS_PORT || 5111) },
   });
 
   managedProcesses.set(sessionId, child);
 
+  let stdoutBuffer = '';
   child.stdout?.on('data', (data: Buffer) => {
-    debugLog(`[Spawner] [${sessionId}] stdout: ${data.toString().trim()}`);
+    const text = data.toString();
+    stdoutBuffer += text;
+    debugLog(`[Spawner] [${sessionId}] stdout: ${text.trim()}`);
+  });
+
+  child.on('close', () => {
+    // Relay complete stdout as assistant response
+    const response = stdoutBuffer.trim();
+    if (response && options.onStdout) {
+      options.onStdout(response);
+    }
   });
 
   child.stderr?.on('data', (data: Buffer) => {
