@@ -118,7 +118,7 @@ There is a bug in Safari that prevents browser text-to-speech from loading high-
 
 ## Known Limitations
 
-- **Background agents don't notify in voice mode.** When Claude launches background agents (subprocesses), their completion notifications appear in the conversation text but don't trigger hooks. This means you won't hear a voice notification when a background task finishes. **Workaround:** Manually check background agent status, or avoid using background agents during voice sessions.
+- **Background agents don't notify in voice mode.** When Claude launches background agents (via the Agent tool), their completion notifications appear in the conversation text but don't trigger hooks. This means you won't hear a voice notification when a background task finishes. **Workaround:** Manually check background agent status, or avoid using background agents during voice sessions. *(Verified with Claude Code 2.1.69, March 2026)*
 
 ## Uninstallation
 
