@@ -16,6 +16,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
 import { SpeechRecognizer } from './speech-recognition.js';
+import { spawnClaudeResume, isSessionProcessRunning, killAllManagedProcesses } from './claude-spawner.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
@@ -197,6 +198,20 @@ class UtteranceQueue {
     }
   }
 
+  markPending(id: string): void {
+    const utterance = this.utterances.find(u => u.id === id);
+    if (utterance && utterance.status === 'delivered') {
+      utterance.status = 'pending';
+      debugLog(`[Queue] reverted to pending: "${utterance.text}"	[id: ${id}]`);
+
+      // Sync status in messages array
+      const message = this.messages.find(m => m.id === id && m.role === 'user');
+      if (message) {
+        message.status = 'pending';
+      }
+    }
+  }
+
   delete(id: string): boolean {
     const utterance = this.utterances.find(u => u.id === id);
 
@@ -325,9 +340,9 @@ function cleanupSounds(): void {
   }
 }
 // Register cleanup on process exit
-process.on('exit', cleanupSounds);
-process.on('SIGINT', () => { cleanupSounds(); process.exit(0); });
-process.on('SIGTERM', () => { cleanupSounds(); process.exit(0); });
+process.on('exit', () => { cleanupSounds(); killAllManagedProcesses(); });
+process.on('SIGINT', () => { cleanupSounds(); killAllManagedProcesses(); process.exit(0); });
+process.on('SIGTERM', () => { cleanupSounds(); killAllManagedProcesses(); process.exit(0); });
 
 // Server-side audio state machine — mirrors browser VoiceStateMachine logic
 // but plays sounds by streaming pre-rendered WAV files over WebSocket
@@ -517,6 +532,12 @@ interface SessionState {
   lastToolUseTimestamp: Date | null;
   lastSpeakTimestamp: Date | null;
   lastActivity: Date;
+  /** Whether this session was started from the browser (managed) vs terminal (unmanaged) */
+  managed: boolean;
+  /** Working directory for managed sessions */
+  managedCwd: string | null;
+  /** Whether a Claude process has been spawned for this session at least once */
+  hasBeenSpawned: boolean;
 }
 
 const sessions = new Map<string, SessionState>();
@@ -536,6 +557,9 @@ function getOrCreateSession(key: string, sessionId?: string, agentId?: string | 
       lastToolUseTimestamp: null,
       lastSpeakTimestamp: null,
       lastActivity: new Date(),
+      managed: false,
+      managedCwd: null,
+      hasBeenSpawned: false,
     };
     sessions.set(key, session);
     debugLog(`[Session] Created: key=${key} session=${sessionId || 'default'} agent=${agentId || 'main'} type=${agentType || 'none'}`);
@@ -660,16 +684,72 @@ app.post('/api/potential-utterances', (req: Request, res: Response) => {
   }
 
   const session = getSessionFromRequest(req);
+  debugLog(`[Utterance] Session resolved: id=${session.sessionId} managed=${session.managed} reqSession=${req.body?.session}`);
   const parsedTimestamp = timestamp ? new Date(timestamp) : undefined;
   const utterance = session.queue.add(text, parsedTimestamp);
+
+  // Auto-spawn: if no Claude process is running for this session, spawn one.
+  // For managed sessions, always spawn regardless of global audio state.
+  // For unmanaged sessions, only spawn when globally inactive.
+  let spawned = false;
+  const shouldSpawn = session.sessionId !== 'default' &&
+    !isSessionProcessRunning(session.sessionId) &&
+    (session.managed || serverAudioState.state === 'inactive');
+  debugLog(`[Utterance] shouldSpawn=${shouldSpawn} sessionId=${session.sessionId} managed=${session.managed} processRunning=${isSessionProcessRunning(session.sessionId)} audioState=${serverAudioState.state}`);
+  if (shouldSpawn) {
+    try {
+      // Collect all pending utterances (including the one just added)
+      const pendingUtterances = session.queue.utterances
+        .filter(u => u.status === 'pending')
+        .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+      if (pendingUtterances.length > 0) {
+        const prompt = pendingUtterances.map(u => u.text).join('\n\n');
+        const utteranceIds = pendingUtterances.map(u => u.id);
+        pendingUtterances.forEach(u => session.queue.markDelivered(u.id));
+
+        const isNewSession = !session.hasBeenSpawned;
+        spawnClaudeResume({
+          sessionId: session.sessionId,
+          prompt,
+          cwd: session.managedCwd || undefined,
+          newSession: isNewSession,
+          onStdout: (response) => {
+            session.queue.addAssistantMessage(response);
+            debugLog(`[AutoSpawn] Relayed response to session=${session.sessionId}: "${response.slice(0, 80)}..."`);
+            // TTS: speak the response via the server's TTS pipeline
+            if (voicePreferences.voiceActive) {
+              const rate = voicePreferences.speechRate || 1.65;
+              enqueueTts(response, rate, compositeKey(session.sessionId));
+              notifyTTSClients(response);
+              debugLog(`[AutoSpawn] Enqueued TTS for managed session response`);
+            }
+          },
+          onSpawnError: () => {
+            utteranceIds.forEach(id => session.queue.markPending(id));
+            debugLog(`[AutoSpawn] Reverted ${utteranceIds.length} utterance(s) to pending after spawn error`);
+          },
+        });
+
+        session.managed = true;
+        session.hasBeenSpawned = true;
+        spawned = true;
+        debugLog(`[AutoSpawn] Spawned Claude for session=${session.sessionId} newSession=${isNewSession} with ${pendingUtterances.length} utterance(s)`);
+      }
+    } catch (error) {
+      debugLog(`[AutoSpawn] Failed to spawn: ${error}`);
+    }
+  }
+
   res.json({
     success: true,
     utterance: {
       id: utterance.id,
       text: utterance.text,
       timestamp: utterance.timestamp,
-      status: utterance.status,
+      status: spawned ? 'delivered' : utterance.status,
     },
+    spawned,
   });
 });
 
@@ -1035,6 +1115,8 @@ function parseHookRequest(req: Request): { key: string; sessionId: string; agent
   const agentType = req.body?.agent_type || null;
   const key = compositeKey(sessionId, agentId);
   const session = getOrCreateSession(key, sessionId, agentId, agentType);
+  // Sessions arriving via hooks already have a running Claude process
+  session.hasBeenSpawned = true;
   return { key, sessionId, agentId, session };
 }
 
@@ -1091,12 +1173,12 @@ function registerIfFirst(key: string): void {
       activeCompositeKey = key;
       debugLog(`[Session] Active upgraded from default → ${key}`);
     } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
-      // Different session_id — only switch if it's NOT a subagent of the current session
+      // Different session_id — check if it's a subagent or managed/child session before switching
       const incomingSession = sessions.get(key);
       const isSubagent = incomingSession?.agentId && incomingSession.agentId !== 'main';
-      if (isSubagent) {
-        // Subagent sessions should NOT steal focus from the lead session
-        debugLog(`[Session] Subagent hook ignored for active switch: ${key} (active stays ${activeCompositeKey})`);
+      if (isSubagent || incomingSession?.managed) {
+        // Subagent and managed session hooks should NOT steal focus from the active session
+        debugLog(`[Session] ${isSubagent ? 'Subagent' : 'Managed session'} hook ignored for active switch: ${key} (active stays ${activeCompositeKey})`);
       } else {
         // New Claude instance (restart or new project) — switch active
         const oldKey = activeCompositeKey;
@@ -1127,9 +1209,9 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   const { key, session } = parseHookRequest(req);
   registerIfFirst(key);
 
-  // Inactive session (subagent): enforce "must speak after tool use" only when background enforcement is explicitly enabled
+  // Inactive session (subagent): enforce "must speak after tool use" when managed, voice-enabled, or background enforcement is on
   if (!isActiveKey(key)) {
-    const enforceSpeak = backgroundVoiceEnforcement;
+    const enforceSpeak = session.managed || voicePreferences.voiceActive || backgroundVoiceEnforcement;
     if (enforceSpeak && session.lastToolUseTimestamp &&
       (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
       res.json({
@@ -1758,6 +1840,9 @@ app.get('/api/sessions', (_req: Request, res: Response) => {
     utteranceCount: s.queue.utterances.length,
     messageCount: s.queue.messages.length,
     pendingCount: s.queue.utterances.filter(u => u.status === 'pending').length,
+    managed: s.managed,
+    managedCwd: s.managedCwd,
+    processRunning: s.sessionId !== 'default' ? isSessionProcessRunning(s.sessionId) : false,
   }));
 
   res.json({
@@ -1782,6 +1867,128 @@ app.post('/api/active-session', (req: Request, res: Response) => {
     success: true,
     activeKey: activeCompositeKey,
   });
+});
+
+// ── Session spawn endpoints (Phase 0: Direct Session Management) ─────────
+
+/**
+ * Start a new managed Claude session.
+ * Creates a fresh session with a new UUID, optionally in a given working directory.
+ * The session is not spawned until a message is sent to it.
+ */
+app.post('/api/session/new', (req: Request, res: Response) => {
+  const { cwd: workingDir } = req.body;
+
+  // Validate cwd if provided
+  if (workingDir) {
+    try {
+      const stats = fs.statSync(workingDir);
+      if (!stats.isDirectory()) {
+        res.status(400).json({ error: `Path is not a directory: ${workingDir}` });
+        return;
+      }
+    } catch {
+      res.status(400).json({ error: `Directory does not exist: ${workingDir}` });
+      return;
+    }
+  }
+
+  const sessionId = randomUUID();
+  const key = compositeKey(sessionId);
+  const session = getOrCreateSession(key, sessionId);
+  session.managed = true;
+  session.managedCwd = workingDir || null;
+
+  // Set as active session
+  activeCompositeKey = key;
+  debugLog(`[Session] New managed session created: id=${sessionId} cwd=${workingDir || '(default)'}`);
+
+  // Notify browser of session change
+  notifySessionReset();
+
+  res.json({
+    success: true,
+    sessionId,
+    key,
+    managed: true,
+    cwd: session.managedCwd,
+  });
+});
+
+/**
+ * Spawn Claude for an inactive session.
+ * Takes a session key and spawns `claude -p --resume <sessionId>` with pending utterances.
+ */
+app.post('/api/session/spawn', (req: Request, res: Response) => {
+  const { sessionKey } = req.body;
+
+  if (!sessionKey) {
+    res.status(400).json({ error: 'sessionKey is required' });
+    return;
+  }
+
+  const session = sessions.get(sessionKey);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  if (session.sessionId === 'default') {
+    res.status(400).json({ error: 'Cannot spawn Claude for the default session. Send a message from Claude Code first to establish a session.' });
+    return;
+  }
+
+  // Check if already running
+  if (isSessionProcessRunning(session.sessionId)) {
+    res.json({ success: true, alreadyRunning: true, sessionId: session.sessionId });
+    return;
+  }
+
+  // Collect pending utterances as the prompt
+  const pendingUtterances = session.queue.utterances
+    .filter(u => u.status === 'pending')
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
+  if (pendingUtterances.length === 0) {
+    res.status(400).json({ error: 'No pending messages to send. Add a message first.' });
+    return;
+  }
+
+  const prompt = pendingUtterances.map(u => u.text).join('\n\n');
+  const utteranceIds = pendingUtterances.map(u => u.id);
+
+  // Mark utterances as delivered since they're being sent as the prompt
+  pendingUtterances.forEach(u => {
+    session.queue.markDelivered(u.id);
+  });
+
+  try {
+    const isNewSession = !session.hasBeenSpawned;
+    spawnClaudeResume({
+      sessionId: session.sessionId,
+      prompt,
+      cwd: session.managedCwd || undefined,
+      newSession: isNewSession,
+      onSpawnError: () => {
+        // Revert utterances to pending so they can be re-delivered
+        utteranceIds.forEach(id => session.queue.markPending(id));
+        debugLog(`[Session] Reverted ${utteranceIds.length} utterance(s) to pending after spawn error`);
+      },
+    });
+
+    session.managed = true;
+    session.hasBeenSpawned = true;
+    debugLog(`[Session] Spawned Claude for session=${session.sessionId} newSession=${isNewSession} with ${pendingUtterances.length} utterance(s)`);
+
+    res.json({
+      success: true,
+      sessionId: session.sessionId,
+      utterancesDelivered: pendingUtterances.length,
+    });
+  } catch (error) {
+    debugLog(`[Session] Spawn failed: ${error}`);
+    res.status(500).json({ error: `Failed to spawn Claude: ${error}` });
+  }
 });
 
 // API for text-to-speech
@@ -1942,6 +2149,11 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
   }
 });
 
+// Skip starting HTTP server if we're a child process spawned by the voice hooks server.
+// The parent server already owns the port. We only need MCP tools + hooks (which connect via HTTP to parent).
+if (process.env.MCP_VOICE_HOOKS_CHILD === 'true') {
+  debugLog('[Server] Child process detected — skipping HTTP server startup');
+} else {
 httpServer.listen(HTTP_PORT, async () => {
   if (eaddrinuseDetected) return; // defensive guard
 
@@ -1992,6 +2204,7 @@ httpServer.listen(HTTP_PORT, async () => {
   // Start HTTPS server in same process, sharing state with HTTP server
   startHttpsServer();
 });
+} // end if not child process
 
 // HTTPS server setup — only called from HTTP listen callback to ensure
 // it runs in the same process that owns the HTTP port and shared state.

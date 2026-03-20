@@ -123,6 +123,13 @@ class MessengerClient {
         this.sidebarCloseBtn = document.getElementById('sidebarCloseBtn');
         this.backgroundEnforcementToggle = document.getElementById('backgroundEnforcementToggle');
 
+        // New session elements
+        this.newSessionBtn = document.getElementById('newSessionBtn');
+        this.newSessionForm = document.getElementById('newSessionForm');
+        this.newSessionCwd = document.getElementById('newSessionCwd');
+        this.newSessionCreate = document.getElementById('newSessionCreate');
+        this.newSessionCancel = document.getElementById('newSessionCancel');
+
         // State
         this.recognitionMode = 'server'; // 'server' or 'browser'
         this.serverRecognitionAvailable = false; // set from server check
@@ -244,7 +251,7 @@ class MessengerClient {
             waitingIndicator.textContent = 'Claude is speaking...';
             waitingIndicator.style.display = 'block';
         } else if (state === 'stopped') {
-            waitingIndicator.textContent = 'Claude\'s turn ended';
+            waitingIndicator.textContent = 'Claude\'s turn ended \u2014 send a message to wake Claude';
             waitingIndicator.style.display = 'block';
         } else {
             waitingIndicator.style.display = 'none';
@@ -289,6 +296,24 @@ class MessengerClient {
                 this.updateBackgroundEnforcement(enabled);
             });
         }
+        // New session button handlers
+        if (this.newSessionBtn) {
+            this.newSessionBtn.addEventListener('click', () => {
+                if (this.newSessionForm) {
+                    this.newSessionForm.style.display = this.newSessionForm.style.display === 'none' ? 'block' : 'none';
+                }
+            });
+        }
+        if (this.newSessionCreate) {
+            this.newSessionCreate.addEventListener('click', () => this.createNewSession());
+        }
+        if (this.newSessionCancel) {
+            this.newSessionCancel.addEventListener('click', () => {
+                if (this.newSessionForm) this.newSessionForm.style.display = 'none';
+                if (this.newSessionCwd) this.newSessionCwd.value = '';
+            });
+        }
+
         // Load sessions immediately
         this.loadSessions();
     }
@@ -388,6 +413,9 @@ class MessengerClient {
 
                 html += `<div class="${classes.join(' ')}" data-session-key='${session.key.replace(/'/g, "&#39;")}' title="${this.escapeHtml(session.key)}">`;
                 html += `<span class="session-label">${this.escapeHtml(label)}</span>`;
+                if (session.managed) {
+                    html += `<span class="managed-badge">${session.processRunning ? 'running' : 'managed'}</span>`;
+                }
                 if (unread > 0 && !isActive) {
                     html += `<span class="session-badge">${unread}</span>`;
                 }
@@ -428,6 +456,31 @@ class MessengerClient {
         // Reload conversation for selected session
         this.loadData();
         this.renderSessionList();
+    }
+
+    async createNewSession() {
+        try {
+            const cwd = this.newSessionCwd ? this.newSessionCwd.value.trim() : '';
+            const response = await fetch(`${this.baseUrl}/api/session/new`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd: cwd || undefined }),
+            });
+            if (response.ok) {
+                const data = await response.json();
+                this.debugLog('New session created:', data);
+                // Hide the form
+                if (this.newSessionForm) this.newSessionForm.style.display = 'none';
+                if (this.newSessionCwd) this.newSessionCwd.value = '';
+                // Reload sessions and conversation
+                this.loadSessions();
+                this.loadData();
+            } else {
+                const err = await response.json();
+                console.error('Failed to create session:', err);
+            }
+        } catch (error) {
+            console.error('Failed to create session:', error);
     }
 
     loadPreferences() {
