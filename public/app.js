@@ -481,7 +481,6 @@ class MessengerClient {
             }
         } catch (error) {
             console.error('Failed to create session:', error);
-        }
     }
 
     loadPreferences() {
