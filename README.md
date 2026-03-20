@@ -116,6 +116,10 @@ Other downloaded voices will show up in the voice dropdown in the voice-hooks br
 
 There is a bug in Safari that prevents browser text-to-speech from loading high-quality voices after browser restart. This is a Safari Web Speech API limitation. To use high-quality voices in Safari you need to set your system voice to Siri and select "Mac System Voice" in the voice-hooks browser interface.
 
+## Known Limitations
+
+- **Background agents don't notify in voice mode.** When Claude launches background agents (via the Agent tool), their completion notifications appear in the conversation text but don't trigger hooks. This means you won't hear a voice notification when a background task finishes. **Workaround:** Manually check background agent status, or avoid using background agents during voice sessions. *(Verified with Claude Code 2.1.69, March 2026)*
+
 ## Uninstallation
 
 Remove the `extraKnownMarketplaces` and `enabledPlugins` entries from your settings file and restart Claude Code.
