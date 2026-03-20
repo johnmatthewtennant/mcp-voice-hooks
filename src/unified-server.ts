@@ -1833,13 +1833,6 @@ app.post('/api/speak', async (req: Request, res: Response) => {
     notifyTTSClients(text);
     debugLog(`[Speak] Sent text to browser: "${text}"`);
 
-    // Render TTS audio via macOS say command and stream over WebSocket
-    // This is async/non-blocking — the speak endpoint returns immediately
-    const sessionKey = whitelistSessionKey || activeCompositeKey;
-    enqueueTts(text, voicePreferences.speechRate, sessionKey).catch(err => {
-      debugLog(`[Speak] Failed to render system voice audio: ${err}`);
-    });
-
     // Store assistant's response in conversation history
     session.queue.addAssistantMessage(text);
 
@@ -1857,6 +1850,17 @@ app.post('/api/speak', async (req: Request, res: Response) => {
     });
 
     session.lastSpeakTimestamp = new Date();
+
+    // Render TTS audio via macOS say command and stream over WebSocket.
+    // Await completion so Claude knows when TTS finishes — this prevents
+    // Claude from moving to the stop hook (which auto-waits for user speech)
+    // before the user has heard the response.
+    const sessionKey = whitelistSessionKey || activeCompositeKey;
+    try {
+      await enqueueTts(text, voicePreferences.speechRate, sessionKey);
+    } catch (err) {
+      debugLog(`[Speak] Failed to render system voice audio: ${err}`);
+    }
 
     res.json({
       success: true,
