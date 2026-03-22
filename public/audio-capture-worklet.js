@@ -20,9 +20,9 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
     // VAD: audio power level tracking
     this._speaking = false;
     this._speakingThreshold = 0.01;  // RMS threshold for speech detection
-    this._silenceThreshold = 0.005;  // RMS threshold for silence (hysteresis)
+    this._silenceThreshold = 0.003;  // RMS threshold for silence (hysteresis, lowered to catch quiet speech)
     this._silenceFrames = 0;
-    this._silenceFramesRequired = 300; // ~800ms at 128 samples/frame @ 48kHz (128/48000 = 2.67ms/frame)
+    this._silenceFramesRequired = 560; // ~1.5s at 128 samples/frame @ 48kHz (128/48000 = 2.67ms/frame)
   }
 
   downsample(buffer, ratio) {
