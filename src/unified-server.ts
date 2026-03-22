@@ -348,7 +348,6 @@ class ServerAudioState {
   private _hookActive = false;
   private _userSpeaking = false;
   private _userSpeakingDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private _userSpeakingSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private _pulseTimer: ReturnType<typeof setInterval> | null = null;
 
   syncState(): void {
@@ -419,13 +418,15 @@ class ServerAudioState {
 
     if (active) {
       // User started speaking — set immediately
+      if (this._userSpeakingDebounceTimer) {
+        clearTimeout(this._userSpeakingDebounceTimer);
+        this._userSpeakingDebounceTimer = null;
+      }
       if (!this._userSpeaking) {
         debugLog('[ServerAudio] userSpeaking = true');
         this._userSpeaking = true;
         this.onUserSpeakingChange?.(true);
       }
-      // Reset silence timeout (2 seconds from last speech activity)
-      this._resetSilenceTimeout();
     } else {
       // User stopped speaking — debounce 300ms to absorb gaps between words
       this._userSpeakingDebounceTimer = setTimeout(() => {
@@ -433,7 +434,6 @@ class ServerAudioState {
         if (this._userSpeaking) {
           debugLog('[ServerAudio] userSpeaking = false (debounced)');
           this._userSpeaking = false;
-          this._clearSilenceTimeout();
           this.onUserSpeakingChange?.(false);
           // Resume TTS queue now that user has stopped speaking
           processTtsQueue();
@@ -443,28 +443,8 @@ class ServerAudioState {
     this.syncState();
   }
 
-  private _resetSilenceTimeout(): void {
-    this._clearSilenceTimeout();
-    // If no transcript events arrive within 2 seconds, assume user stopped speaking
-    this._userSpeakingSilenceTimer = setTimeout(() => {
-      this._userSpeakingSilenceTimer = null;
-      if (this._userSpeaking) {
-        debugLog('[ServerAudio] userSpeaking = false (silence timeout)');
-        this._userSpeaking = false;
-        this.onUserSpeakingChange?.(false);
-        this.syncState();
-        // Resume TTS queue
-        processTtsQueue();
-      }
-    }, 2000);
-  }
-
-  private _clearSilenceTimeout(): void {
-    if (this._userSpeakingSilenceTimer) {
-      clearTimeout(this._userSpeakingSilenceTimer);
-      this._userSpeakingSilenceTimer = null;
-    }
-  }
+  // No server-side silence timeout — we rely entirely on browser worklet VAD
+  // for stop events. WebSocket disconnect handler clears speaking state as a safety net.
 
   // Callback for broadcasting state changes to SSE clients.
   // Set after ttsClients is initialised (see broadcastVoiceState helper).
