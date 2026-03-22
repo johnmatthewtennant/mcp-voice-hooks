@@ -421,15 +421,13 @@ class ServerAudioState {
         this.onUserSpeakingChange?.(true);
       }
     } else {
-      // User stopped speaking — debounce 300ms to absorb gaps between words
-      this._userSpeakingDebounceTimer = setTimeout(() => {
-        this._userSpeakingDebounceTimer = null;
-        if (this._userSpeaking) {
-          debugLog('[ServerAudio] userSpeaking = false (debounced)');
-          this._userSpeaking = false;
-          this.onUserSpeakingChange?.(false);
-        }
-      }, 300);
+      // User stopped speaking — no debounce needed, the browser worklet
+      // already applies 800ms of silence before sending a stop event
+      if (this._userSpeaking) {
+        debugLog('[ServerAudio] userSpeaking = false');
+        this._userSpeaking = false;
+        this.onUserSpeakingChange?.(false);
+      }
     }
     this.syncState();
   }

@@ -22,7 +22,7 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
     this._speakingThreshold = 0.01;  // RMS threshold for speech detection
     this._silenceThreshold = 0.005;  // RMS threshold for silence (hysteresis)
     this._silenceFrames = 0;
-    this._silenceFramesRequired = 40; // ~800ms at 128 samples/frame @ 48kHz
+    this._silenceFramesRequired = 300; // ~800ms at 128 samples/frame @ 48kHz (128/48000 = 2.67ms/frame)
   }
 
   downsample(buffer, ratio) {
