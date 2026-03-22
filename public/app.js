@@ -197,6 +197,8 @@ class MessengerClient {
                     this.audioPlayer.clear();
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
+                } else if (data.type === 'user-speaking') {
+                    this.handleUserSpeaking(data.speaking);
                 } else if (data.type === 'session-reset') {
                     // New Claude session started — re-sync our voice state with the server
                     console.log('[SSE] New Claude session detected, re-syncing voice state');
@@ -213,6 +215,13 @@ class MessengerClient {
             this.currentVoiceState = 'inactive';
             this.updateVoiceStateUI('inactive');
         };
+    }
+
+    handleUserSpeaking(speaking) {
+        const indicator = document.getElementById('userSpeakingIndicator');
+        if (indicator) {
+            indicator.style.display = speaking ? 'block' : 'none';
+        }
     }
 
     handleWaitStatus(isWaiting) {

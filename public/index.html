@@ -157,6 +157,18 @@
             font-size: 16px;
         }
 
+        /* User Speaking Indicator */
+        .user-speaking-indicator {
+            text-align: center;
+            color: #e74c3c;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 8px 20px;
+            margin-top: 8px;
+            background: rgba(231, 76, 60, 0.1);
+            border-radius: 8px;
+        }
+
         /* Waiting Indicator */
         .waiting-indicator {
             text-align: center;
@@ -908,6 +920,9 @@
                                 <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
                             </svg>
                             <p id="emptyStateMessage">No messages yet. Type or speak to start the conversation!</p>
+                        </div>
+                        <div id="userSpeakingIndicator" class="user-speaking-indicator" style="display: none;">
+                            🎤 User speaking (pre-speak blocked)
                         </div>
                         <div id="waitingIndicator" class="waiting-indicator" style="display: none;">
                             Claude is waiting...

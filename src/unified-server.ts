@@ -421,8 +421,9 @@ class ServerAudioState {
       // User started speaking — set immediately
       if (!this._userSpeaking) {
         debugLog('[ServerAudio] userSpeaking = true');
+        this._userSpeaking = true;
+        this.onUserSpeakingChange?.(true);
       }
-      this._userSpeaking = true;
       // Reset silence timeout (2 seconds from last speech activity)
       this._resetSilenceTimeout();
     } else {
@@ -433,6 +434,7 @@ class ServerAudioState {
           debugLog('[ServerAudio] userSpeaking = false (debounced)');
           this._userSpeaking = false;
           this._clearSilenceTimeout();
+          this.onUserSpeakingChange?.(false);
           // Resume TTS queue now that user has stopped speaking
           processTtsQueue();
         }
@@ -449,6 +451,7 @@ class ServerAudioState {
       if (this._userSpeaking) {
         debugLog('[ServerAudio] userSpeaking = false (silence timeout)');
         this._userSpeaking = false;
+        this.onUserSpeakingChange?.(false);
         this.syncState();
         // Resume TTS queue
         processTtsQueue();
@@ -466,6 +469,9 @@ class ServerAudioState {
   // Callback for broadcasting state changes to SSE clients.
   // Set after ttsClients is initialised (see broadcastVoiceState helper).
   onStateChange: ((state: string) => void) | null = null;
+
+  // Callback for broadcasting userSpeaking changes to SSE clients.
+  onUserSpeakingChange: ((speaking: boolean) => void) | null = null;
 
   private _transition(newState: typeof this.state): void {
     const oldState = this.state;
@@ -1474,8 +1480,20 @@ function broadcastVoiceState(state: string): void {
   });
 }
 
-// Wire up the ServerAudioState callback now that ttsClients exists
+// Wire up the ServerAudioState callbacks now that ttsClients exists
 serverAudioState.onStateChange = broadcastVoiceState;
+serverAudioState.onUserSpeakingChange = (speaking: boolean) => {
+  const message = JSON.stringify({
+    type: 'user-speaking',
+    speaking,
+    sessionKey: activeCompositeKey
+  });
+  ttsClients.forEach((viewingKey, client) => {
+    if (viewingKey === null || viewingKey === activeCompositeKey) {
+      client.write(`data: ${message}\n\n`);
+    }
+  });
+};
 
 
 // ── WebSocket audio endpoint ──────────────────────────────────────────
