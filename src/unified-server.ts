@@ -1044,7 +1044,13 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
         }
 
         if (serverAudioState.isUserSpeaking) {
-          debugLog('[Pre-Speak Hook] Timed out waiting for user to stop speaking — approving anyway');
+          debugLog('[Pre-Speak Hook] Timed out waiting for user to stop speaking — checking for utterances before approving');
+          // Even on timeout, check if utterances arrived during the wait
+          const timedOutBlock = dequeueAndBlock(s);
+          if (timedOutBlock) {
+            debugLog('[Pre-Speak Hook] Found utterances after timeout — blocking');
+            return timedOutBlock;
+          }
           return { decision: 'approve' as const };
         }
 
@@ -1652,9 +1658,10 @@ function startRecognizerForClient(client: WsAudioClient): void {
         type: 'transcript-interim',
         text: result.text,
       }));
-    } else if (result.type === 'final' && result.text.trim()) {
+    } else if (result.type === 'final') {
       // User finished speaking — release TTS block after debounce
       serverAudioState.setUserSpeaking(false);
+      if (!result.text.trim()) return; // Empty final — just clear speaking state
       const utteranceId = randomUUID();
       // Create utterance in the selected session (from WS client), falling back to active
       const selectedKey = (client as any).selectedSessionKey;
@@ -1673,12 +1680,14 @@ function startRecognizerForClient(client: WsAudioClient): void {
 
   recognizer.on('error', (err: Error) => {
     debugLog(`[SpeechRecognizer] Error: ${err.message}`);
+    serverAudioState.setUserSpeaking(false); // Clear speaking state on error
     if (client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(JSON.stringify({ type: 'error', message: `Speech recognition error: ${err.message}` }));
     }
   });
 
   recognizer.on('exit', (_code: number | null, _signal: string | null) => {
+    serverAudioState.setUserSpeaking(false); // Clear speaking state on exit
     // If the client is still capturing and recognizer crashed, it will auto-restart
     // via the SpeechRecognizer class. We just need to re-assign when it restarts.
   });

@@ -831,6 +831,21 @@ export class TestServer {
             await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
           }
 
+          // On timeout, still check for utterances before approving
+          if (this.isUserSpeaking) {
+            const pendingTimeout = session.queue.utterances.filter((u: any) => u.status === 'pending');
+            if (pendingTimeout.length > 0) {
+              const dequeued = pendingTimeout.map((u: any) => { u.status = 'delivered'; u.deliveredAt = new Date(); return u; });
+              const lines = dequeued.map((u: any) => `"${u.text}"`).join('\n');
+              res.json({ decision: 'block', reason: `Assistant received voice input from the user (${dequeued.length} utterance(s)):\n\n${lines}\n\npending` });
+              return;
+            }
+            // No utterances on timeout — approve
+            if (speakText) this.addToWhitelist(speakText, key);
+            res.json({ decision: 'approve' });
+            return;
+          }
+
           // Grace period for finalized text
           await new Promise(resolve => setTimeout(resolve, GRACE_PERIOD_MS));
 
