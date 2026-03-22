@@ -157,26 +157,35 @@
             font-size: 16px;
         }
 
-        /* User Speaking Indicator */
-        .user-speaking-indicator {
+        /* Unified Status Indicator */
+        .status-indicator {
             text-align: center;
-            color: #e74c3c;
             font-size: 14px;
-            font-weight: bold;
             padding: 8px 20px;
             margin-top: 8px;
+            min-height: 20px;
+        }
+        .status-indicator.user-speaking {
+            color: #e74c3c;
+            font-weight: bold;
             background: rgba(231, 76, 60, 0.1);
             border-radius: 8px;
         }
-
-        /* Waiting Indicator */
-        .waiting-indicator {
-            text-align: center;
+        .status-indicator.listening {
             color: #999;
-            font-size: 14px;
             font-style: italic;
-            padding: 12px 20px;
-            margin-top: 8px;
+        }
+        .status-indicator.processing {
+            color: #f39c12;
+            font-style: italic;
+        }
+        .status-indicator.speaking {
+            color: #3498db;
+            font-style: italic;
+        }
+        .status-indicator.stopped {
+            color: #999;
+            font-style: italic;
         }
 
         /* Message Bubbles */
@@ -921,12 +930,7 @@
                             </svg>
                             <p id="emptyStateMessage">No messages yet. Type or speak to start the conversation!</p>
                         </div>
-                        <div id="userSpeakingIndicator" class="user-speaking-indicator" style="display: none;">
-                            🎤 User speaking (pre-speak blocked)
-                        </div>
-                        <div id="waitingIndicator" class="waiting-indicator" style="display: none;">
-                            Claude is waiting...
-                        </div>
+                        <div id="statusIndicator" class="status-indicator"></div>
                     </div>
                 </div>
             </div>

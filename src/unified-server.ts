@@ -1646,6 +1646,16 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       break;
     }
 
+    case 'user-speaking-start':
+      serverAudioState.setUserSpeaking(true);
+      debugLog('[WS] Browser VAD: user speaking start');
+      break;
+
+    case 'user-speaking-stop':
+      serverAudioState.setUserSpeaking(false);
+      debugLog('[WS] Browser VAD: user speaking stop');
+      break;
+
     case 'ping':
       client.ws.send(JSON.stringify({ type: 'pong' }));
       break;

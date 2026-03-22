@@ -218,53 +218,61 @@ class MessengerClient {
     }
 
     handleUserSpeaking(speaking) {
-        const userIndicator = document.getElementById('userSpeakingIndicator');
-        const waitIndicator = document.getElementById('waitingIndicator');
-        if (userIndicator) {
-            userIndicator.style.display = speaking ? 'block' : 'none';
-        }
-        // Hide waiting indicator when user is speaking
-        if (waitIndicator && speaking) {
-            waitIndicator.style.display = 'none';
+        this._userSpeakingActive = speaking;
+        if (speaking) {
+            // Show immediately, cancel any pending clear
+            if (this._userSpeakingHideTimer) {
+                clearTimeout(this._userSpeakingHideTimer);
+                this._userSpeakingHideTimer = null;
+            }
+            this.updateStatusIndicator('user-speaking', '🎤 User speaking');
+        } else {
+            // Delay clearing by 1s to prevent flickering during natural speech pauses
+            if (this._userSpeakingHideTimer) clearTimeout(this._userSpeakingHideTimer);
+            this._userSpeakingHideTimer = setTimeout(() => {
+                this._userSpeakingActive = false;
+                this._userSpeakingHideTimer = null;
+                // Restore the voice state after user stops speaking
+                this.updateVoiceStateUI(this.currentVoiceState);
+            }, 1000);
         }
     }
 
     handleWaitStatus(isWaiting) {
-        // Fallback handler for waitStatus SSE events.
-        // voice-state SSE events are now the primary driver for UI state.
-        const waitingIndicator = document.getElementById('waitingIndicator');
-        if (waitingIndicator) {
-            const wasAtBottom = this.isUserNearBottom();
-            waitingIndicator.style.display = isWaiting ? 'block' : 'none';
-            if (isWaiting && wasAtBottom) {
-                this.scrollToBottom();
-            }
-        }
+        // No-op — unified status indicator is now driven by updateVoiceStateUI
     }
 
     updateVoiceStateUI(state) {
-        const waitingIndicator = document.getElementById('waitingIndicator');
-        if (!waitingIndicator) return;
+        // Don't override user-speaking indicator
+        if (this._userSpeakingActive) return;
+
+        if (state === 'listening') {
+            this.updateStatusIndicator('listening', 'Claude is waiting...');
+        } else if (state === 'processing') {
+            this.updateStatusIndicator('processing', 'Claude is processing...');
+        } else if (state === 'speaking') {
+            this.updateStatusIndicator('speaking', 'Claude is speaking...');
+        } else if (state === 'stopped') {
+            this.updateStatusIndicator('stopped', 'Claude\'s turn ended');
+        } else {
+            this.updateStatusIndicator('', '');
+        }
+    }
+
+    updateStatusIndicator(className, text) {
+        const indicator = document.getElementById('statusIndicator');
+        if (!indicator) return;
 
         const wasAtBottom = this.isUserNearBottom();
 
-        if (state === 'listening') {
-            waitingIndicator.textContent = 'Claude is waiting...';
-            waitingIndicator.style.display = 'block';
-        } else if (state === 'processing') {
-            waitingIndicator.textContent = 'Claude is processing...';
-            waitingIndicator.style.display = 'block';
-        } else if (state === 'speaking') {
-            waitingIndicator.textContent = 'Claude is speaking...';
-            waitingIndicator.style.display = 'block';
-        } else if (state === 'stopped') {
-            waitingIndicator.textContent = 'Claude\'s turn ended';
-            waitingIndicator.style.display = 'block';
-        } else {
-            waitingIndicator.style.display = 'none';
+        // Remove all state classes
+        indicator.className = 'status-indicator';
+        if (className) {
+            indicator.classList.add(className);
         }
+        indicator.textContent = text;
 
-        if (state !== 'inactive' && wasAtBottom) {
+        if (text && wasAtBottom) {
             this.scrollToBottom();
         }
     }
@@ -624,7 +632,7 @@ class MessengerClient {
         });
 
         // Get waiting indicator to insert messages before it
-        const waitingIndicator = container.querySelector('.waiting-indicator');
+        const statusIndicator = container.querySelector('.status-indicator');
 
         // Check if user is near bottom before adding content
         const wasAtBottom = this.isUserNearBottom();
@@ -632,10 +640,10 @@ class MessengerClient {
         // Only render new messages and update status for existing ones
         messages.forEach(message => {
             if (!existingIds.has(message.id)) {
-                // New message - create bubble and insert before waiting indicator
+                // New message - create bubble and insert before status indicator
                 const bubble = this.createMessageBubble(message);
-                if (waitingIndicator) {
-                    container.insertBefore(bubble, waitingIndicator);
+                if (statusIndicator) {
+                    container.insertBefore(bubble, statusIndicator);
                 } else {
                     container.appendChild(bubble);
                 }
@@ -810,8 +818,10 @@ class MessengerClient {
             // Open WebSocket; audio capture starts from the onopen callback
             this.connectAudioWebSocket();
 
-            // Start browser speech recognition only if NOT using server recognition
-            if (!this.useServerRecognition && this.recognition) {
+            // Start browser speech recognition
+            // When using server recognition, browser STT still runs for VAD events
+            // (onspeechstart/onspeechend) — transcript results are skipped
+            if (this.recognition) {
                 this.recognition.start();
             }
 
@@ -884,6 +894,21 @@ class MessengerClient {
                 this.messageInput.value = interimTranscript;
                 this.isInterimText = true;
                 this.autoGrowTextarea();
+            }
+        };
+
+        // VAD events — send to server for user-speaking state machine
+        this.recognition.onspeechstart = () => {
+            console.log('[VAD] Speech started');
+            if (this.wsAudioClient?.readyState === WebSocket.OPEN) {
+                this.wsAudioClient.send(JSON.stringify({ type: 'user-speaking-start' }));
+            }
+        };
+
+        this.recognition.onspeechend = () => {
+            console.log('[VAD] Speech ended');
+            if (this.wsAudioClient?.readyState === WebSocket.OPEN) {
+                this.wsAudioClient.send(JSON.stringify({ type: 'user-speaking-stop' }));
             }
         };
 
