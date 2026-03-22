@@ -105,6 +105,49 @@ describe('Pre-speak hook: block while user is speaking', () => {
     expect(data.decision).toBe('approve');
   });
 
+  it('should block with utterances when finalized text arrives after user stops speaking', async () => {
+    server.isUserSpeaking = true;
+
+    const requestPromise = preSpeakRequest();
+
+    // Finalized text arrives while user is still speaking
+    setTimeout(async () => {
+      await fetch(`${server.url}/api/potential-utterances`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Actually wait, I changed my mind' })
+      });
+    }, 100);
+
+    // User stops speaking after 200ms
+    setTimeout(() => {
+      server.isUserSpeaking = false;
+    }, 200);
+
+    const response = await requestPromise;
+    const data = await response.json() as any;
+
+    expect(data.decision).toBe('block');
+    expect(data.reason).toContain('Actually wait');
+  });
+
+  it('should approve when user stops speaking and no text arrives during grace period', async () => {
+    server.isUserSpeaking = true;
+
+    const requestPromise = preSpeakRequest();
+
+    // User stops speaking after 200ms — no utterance added
+    setTimeout(() => {
+      server.isUserSpeaking = false;
+    }, 200);
+
+    const response = await requestPromise;
+    const data = await response.json() as any;
+
+    // No finalized text after grace period — false alarm, approve
+    expect(data.decision).toBe('approve');
+  });
+
   it('should measure blocking duration approximately matches user speaking duration', async () => {
     server.isUserSpeaking = true;
     const startTime = Date.now();
