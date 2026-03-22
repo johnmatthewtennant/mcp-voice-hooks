@@ -1029,22 +1029,46 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
     return { decision: 'approve' };
   }
 
-  // 4. Handle speak — block while user is speaking
+  // 4. Handle speak — block while user is speaking, then check for finalized text
   if (attemptedAction === 'speak') {
     if (serverAudioState.isUserSpeaking) {
       return (async () => {
-        debugLog('[Pre-Speak Hook] User is speaking — waiting for silence before approving speak...');
+        debugLog('[Pre-Speak Hook] User is speaking — waiting for speech to finish...');
         const POLL_INTERVAL_MS = 100;
         const MAX_WAIT_MS = 10000; // 10 second safety timeout
+        const GRACE_PERIOD_MS = 500; // wait for finalized text after speech stops
         const startTime = Date.now();
+
+        // Wait for user to stop speaking
         while (serverAudioState.isUserSpeaking && (Date.now() - startTime) < MAX_WAIT_MS) {
           await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
         }
+
         if (serverAudioState.isUserSpeaking) {
           debugLog('[Pre-Speak Hook] Timed out waiting for user to stop speaking — approving anyway');
-        } else {
-          debugLog(`[Pre-Speak Hook] User stopped speaking after ${Date.now() - startTime}ms — approving speak`);
+          return { decision: 'approve' as const };
         }
+
+        // User stopped speaking — grace period to wait for finalized text
+        debugLog(`[Pre-Speak Hook] User stopped speaking after ${Date.now() - startTime}ms — waiting ${GRACE_PERIOD_MS}ms for finalized text...`);
+        await new Promise(resolve => setTimeout(resolve, GRACE_PERIOD_MS));
+
+        // Check if finalized utterances arrived during speech + grace period
+        const pendingNow = s.queue.utterances.filter(u => u.status === 'pending');
+        if (pendingNow.length > 0) {
+          const dequeueResult = dequeueUtterancesCore(s);
+          if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
+            const reversedUtterances = dequeueResult.utterances.reverse();
+            debugLog(`[Pre-Speak Hook] Finalized text arrived — blocking with ${reversedUtterances.length} utterance(s)`);
+            return {
+              decision: 'block' as const,
+              reason: formatVoiceUtterances(reversedUtterances)
+            };
+          }
+        }
+
+        // No finalized text — false alarm, approve speak
+        debugLog('[Pre-Speak Hook] No finalized text after grace period — approving speak');
         return { decision: 'approve' as const };
       })();
     }
