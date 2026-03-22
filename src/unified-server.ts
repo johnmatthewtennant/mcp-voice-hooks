@@ -985,28 +985,27 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 });
 
 // Unified hook handler
+// Dequeue pending utterances and return a block response if any exist.
+// Returns null if no pending utterances.
+function dequeueAndBlock(s: SessionState): { decision: 'block', reason: string } | null {
+  const pending = s.queue.utterances.filter(u => u.status === 'pending');
+  if (pending.length === 0) return null;
+
+  const result = dequeueUtterancesCore(s);
+  if (result.success && result.utterances && result.utterances.length > 0) {
+    const reversed = result.utterances.reverse();
+    return { decision: 'block', reason: formatVoiceUtterances(reversed) };
+  }
+  return null;
+}
+
 function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool', session?: SessionState): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
   const s = session || getActiveSessionOrFirst();
   const voiceActive = voicePreferences.voiceActive;
 
   // 1. Check for pending utterances and auto-dequeue
-  // Always check for pending utterances regardless of voiceActive
-  // This allows typed messages to be dequeued even when mic is off
-  const pendingUtterances = s.queue.utterances.filter(u => u.status === 'pending');
-  if (pendingUtterances.length > 0) {
-    // Always dequeue (dequeueUtterancesCore no longer requires voiceActive)
-    const dequeueResult = dequeueUtterancesCore(s);
-
-    if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
-      // Reverse to show oldest first
-      const reversedUtterances = dequeueResult.utterances.reverse();
-
-      return {
-        decision: 'block',
-        reason: formatVoiceUtterances(reversedUtterances)
-      };
-    }
-  }
+  const blocked = dequeueAndBlock(s);
+  if (blocked) return blocked;
 
   // 2. Check for delivered utterances (when voice enabled)
   if (voiceActive) {
@@ -1054,17 +1053,10 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
         await new Promise(resolve => setTimeout(resolve, GRACE_PERIOD_MS));
 
         // Check if finalized utterances arrived during speech + grace period
-        const pendingNow = s.queue.utterances.filter(u => u.status === 'pending');
-        if (pendingNow.length > 0) {
-          const dequeueResult = dequeueUtterancesCore(s);
-          if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
-            const reversedUtterances = dequeueResult.utterances.reverse();
-            debugLog(`[Pre-Speak Hook] Finalized text arrived — blocking with ${reversedUtterances.length} utterance(s)`);
-            return {
-              decision: 'block' as const,
-              reason: formatVoiceUtterances(reversedUtterances)
-            };
-          }
+        const blocked = dequeueAndBlock(s);
+        if (blocked) {
+          debugLog(`[Pre-Speak Hook] Finalized text arrived — blocking with utterances`);
+          return blocked;
         }
 
         // No finalized text — false alarm, approve speak
