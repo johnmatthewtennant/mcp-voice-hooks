@@ -254,8 +254,10 @@ class MessengerClient {
             this.updateStatusIndicator('speaking', 'Claude is speaking...');
         } else if (state === 'stopped') {
             this.updateStatusIndicator('stopped', 'Claude\'s turn ended');
+        } else if (state === 'inactive') {
+            this.updateStatusIndicator('idle', 'Idle');
         } else {
-            this.updateStatusIndicator('', '');
+            this.updateStatusIndicator('idle', 'Idle');
         }
     }
 
