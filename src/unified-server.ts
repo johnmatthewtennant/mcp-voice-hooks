@@ -1666,21 +1666,29 @@ function startRecognizerForClient(client: WsAudioClient): void {
   const repoRoot = path.join(__dirname, '..');
   const recognizer = new SpeechRecognizer(repoRoot);
 
-  // VAD events drive the userSpeaking state (replaces interim-based detection)
+  // VAD events supplement interim-based detection
   recognizer.on('vad', (speaking: boolean) => {
-    serverAudioState.setUserSpeaking(speaking);
+    if (speaking) {
+      serverAudioState.setUserSpeaking(true);
+    }
+    // Don't clear on VAD false — let the final transcript or silence timeout handle that
+    debugLog(`[SpeechRecognizer] VAD event: speaking=${speaking}`);
   });
 
   recognizer.on('transcript', (result: { type: string; text: string }) => {
     if (client.ws.readyState !== WebSocket.OPEN) return;
 
     if (result.type === 'interim') {
+      // Interim results also signal user is speaking
+      serverAudioState.setUserSpeaking(true);
       client.ws.send(JSON.stringify({
         type: 'transcript-interim',
         text: result.text,
       }));
     } else if (result.type === 'final') {
-      if (!result.text.trim()) return; // Empty final — skip
+      // Final result — user stopped speaking
+      serverAudioState.setUserSpeaking(false);
+      if (!result.text.trim()) return; // Empty final — just clear speaking state
       const utteranceId = randomUUID();
       // Create utterance in the selected session (from WS client), falling back to active
       const selectedKey = (client as any).selectedSessionKey;
