@@ -421,13 +421,20 @@ class ServerAudioState {
         this.onUserSpeakingChange?.(true);
       }
     } else {
-      // User stopped speaking — no debounce needed, the browser worklet
-      // already applies 800ms of silence before sending a stop event
-      if (this._userSpeaking) {
-        debugLog('[ServerAudio] userSpeaking = false');
-        this._userSpeaking = false;
-        this.onUserSpeakingChange?.(false);
+      // User stopped speaking — debounce 500ms as safety buffer.
+      // The worklet already applies 1.5s silence detection, but the server
+      // needs a buffer to avoid race conditions with pre-speak hook checks.
+      if (this._userSpeakingDebounceTimer) {
+        clearTimeout(this._userSpeakingDebounceTimer);
       }
+      this._userSpeakingDebounceTimer = setTimeout(() => {
+        this._userSpeakingDebounceTimer = null;
+        if (this._userSpeaking) {
+          debugLog('[ServerAudio] userSpeaking = false (debounced 500ms)');
+          this._userSpeaking = false;
+          this.onUserSpeakingChange?.(false);
+        }
+      }, 500);
     }
     this.syncState();
   }
