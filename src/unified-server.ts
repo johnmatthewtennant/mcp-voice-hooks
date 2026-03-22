@@ -63,18 +63,11 @@ function waitForTtsAck(audioId: string): Promise<void> {
 }
 
 async function processTtsQueue() {
-  if (ttsPlaying || ttsQueue.length === 0 || serverAudioState.isUserSpeaking) return;
+  if (ttsPlaying || ttsQueue.length === 0) return;
   ttsPlaying = true;
   const item = ttsQueue.shift()!;
   try {
     const { audioId, filePath } = await renderTtsToFile(item.text, item.rate);
-    // If user started speaking during render, re-enqueue and defer
-    if (serverAudioState.isUserSpeaking) {
-      debugLog(`[TTS] User started speaking during render — re-enqueueing`);
-      ttsQueue.unshift(item);
-      ttsPlaying = false;
-      return;
-    }
     // Check if a WS client is connected for this session — prefer WS delivery
     const targetKey = item.sessionKey || activeCompositeKey;
     const wsClient = findWsClientForSession(targetKey);
@@ -435,8 +428,6 @@ class ServerAudioState {
           debugLog('[ServerAudio] userSpeaking = false (debounced)');
           this._userSpeaking = false;
           this.onUserSpeakingChange?.(false);
-          // Resume TTS queue now that user has stopped speaking
-          processTtsQueue();
         }
       }, 300);
     }
