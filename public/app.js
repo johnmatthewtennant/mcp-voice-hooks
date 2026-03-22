@@ -820,10 +820,9 @@ class MessengerClient {
             // Open WebSocket; audio capture starts from the onopen callback
             this.connectAudioWebSocket();
 
-            // Start browser speech recognition
-            // When using server recognition, browser STT still runs for VAD events
-            // (onspeechstart/onspeechend) — transcript results are skipped
-            if (this.recognition) {
+            // Start browser speech recognition only if NOT using server recognition
+            // (worklet audio-level VAD handles voice activity detection for server mode)
+            if (!this.useServerRecognition && this.recognition) {
                 this.recognition.start();
             }
 
@@ -899,20 +898,7 @@ class MessengerClient {
             }
         };
 
-        // VAD events — send to server for user-speaking state machine
-        this.recognition.onspeechstart = () => {
-            console.log('[VAD] Speech started');
-            if (this.wsAudioClient?.readyState === WebSocket.OPEN) {
-                this.wsAudioClient.send(JSON.stringify({ type: 'user-speaking-start' }));
-            }
-        };
-
-        this.recognition.onspeechend = () => {
-            console.log('[VAD] Speech ended');
-            if (this.wsAudioClient?.readyState === WebSocket.OPEN) {
-                this.wsAudioClient.send(JSON.stringify({ type: 'user-speaking-stop' }));
-            }
-        };
+        // Browser STT VAD removed — worklet audio-level VAD handles this now
 
         this.recognition.onerror = (event) => {
             if (event.error !== 'no-speech') {
