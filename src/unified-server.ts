@@ -411,10 +411,6 @@ class ServerAudioState {
 
     if (active) {
       // User started speaking — set immediately
-      if (this._userSpeakingDebounceTimer) {
-        clearTimeout(this._userSpeakingDebounceTimer);
-        this._userSpeakingDebounceTimer = null;
-      }
       if (!this._userSpeaking) {
         debugLog('[ServerAudio] userSpeaking = true');
         this._userSpeaking = true;
@@ -1020,43 +1016,46 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
         const GRACE_PERIOD_MS = 2000; // wait for finalized text after speech stops
         const startTime = Date.now();
 
-        // Wait for user to stop speaking
-        while (serverAudioState.isUserSpeaking && (Date.now() - startTime) < MAX_WAIT_MS) {
-          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
-        }
-
-        if (serverAudioState.isUserSpeaking) {
-          debugLog('[Pre-Speak Hook] Timed out waiting for user to stop speaking — checking for utterances before approving');
-          // Even on timeout, check if utterances arrived during the wait
-          const timedOutBlock = dequeueAndBlock(s);
-          if (timedOutBlock) {
-            debugLog('[Pre-Speak Hook] Found utterances after timeout — blocking');
-            return timedOutBlock;
+        // Outer loop: handles user resuming speech during grace period
+        // by going back to wait-for-silence → grace-period cycle
+        while ((Date.now() - startTime) < MAX_WAIT_MS) {
+          // Wait for user to stop speaking
+          while (serverAudioState.isUserSpeaking && (Date.now() - startTime) < MAX_WAIT_MS) {
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
           }
-          return { decision: 'approve' as const };
-        }
 
-        // User stopped speaking — poll for finalized text during grace period
-        debugLog(`[Pre-Speak Hook] User stopped speaking after ${Date.now() - startTime}ms — polling ${GRACE_PERIOD_MS}ms for finalized text...`);
-        const graceStart = Date.now();
-        while ((Date.now() - graceStart) < GRACE_PERIOD_MS) {
-          // Check for pending utterances on each poll
-          const blocked = dequeueAndBlock(s);
-          if (blocked) {
-            debugLog(`[Pre-Speak Hook] Finalized text arrived during grace period — blocking with utterances`);
-            return blocked;
-          }
-          // Also check if user started speaking again
           if (serverAudioState.isUserSpeaking) {
-            debugLog('[Pre-Speak Hook] User started speaking again during grace period — resuming wait');
-            // Go back to waiting for speech to finish
-            while (serverAudioState.isUserSpeaking && (Date.now() - startTime) < MAX_WAIT_MS) {
-              await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+            debugLog('[Pre-Speak Hook] Timed out waiting for user to stop speaking — checking for utterances before approving');
+            const timedOutBlock = dequeueAndBlock(s);
+            if (timedOutBlock) {
+              debugLog('[Pre-Speak Hook] Found utterances after timeout — blocking');
+              return timedOutBlock;
             }
-            // Reset grace period
-            break;
+            return { decision: 'approve' as const };
           }
-          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+
+          // User stopped speaking — poll for finalized text during grace period
+          debugLog(`[Pre-Speak Hook] User stopped speaking after ${Date.now() - startTime}ms — polling ${GRACE_PERIOD_MS}ms for finalized text...`);
+          const graceStart = Date.now();
+          let userResumedSpeaking = false;
+
+          while ((Date.now() - graceStart) < GRACE_PERIOD_MS && (Date.now() - startTime) < MAX_WAIT_MS) {
+            const blocked = dequeueAndBlock(s);
+            if (blocked) {
+              debugLog(`[Pre-Speak Hook] Finalized text arrived during grace period — blocking with utterances`);
+              return blocked;
+            }
+            // If user starts speaking again, restart the whole cycle
+            if (serverAudioState.isUserSpeaking) {
+              debugLog('[Pre-Speak Hook] User started speaking again during grace period — restarting wait cycle');
+              userResumedSpeaking = true;
+              break;
+            }
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+          }
+
+          // If user didn't resume, grace period completed — do final check and exit
+          if (!userResumedSpeaking) break;
         }
 
         // Final check after grace period
@@ -1691,9 +1690,12 @@ function startRecognizerForClient(client: WsAudioClient): void {
         text: result.text,
       }));
     } else if (result.type === 'final') {
-      // Final result — user stopped speaking
-      serverAudioState.setUserSpeaking(false);
-      if (!result.text.trim()) return; // Empty final — just clear speaking state
+      // NOTE: Do NOT call setUserSpeaking(false) here. A "final" transcript means a
+      // segment was finalized by the recognizer, but the user may still be mid-thought
+      // (e.g., "Please fix the bug" finalizes while they continue "...in the login page").
+      // Rely on the browser worklet VAD (audio-level silence detection) as the sole
+      // authority for when the user actually stops speaking.
+      if (!result.text.trim()) return; // Empty final — ignore
       const utteranceId = randomUUID();
       // Create utterance in the selected session (from WS client), falling back to active
       const selectedKey = (client as any).selectedSessionKey;

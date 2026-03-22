@@ -227,14 +227,16 @@ class MessengerClient {
             }
             this.updateStatusIndicator('user-speaking', '🎤 User speaking');
         } else {
-            // Delay clearing by 1s to prevent flickering during natural speech pauses
+            // Delay clearing by 2s to prevent flickering during natural speech pauses.
+            // The server debounces stop events by 1s, so we add extra buffer here
+            // to keep the indicator stable throughout natural inter-sentence pauses.
             if (this._userSpeakingHideTimer) clearTimeout(this._userSpeakingHideTimer);
             this._userSpeakingHideTimer = setTimeout(() => {
                 this._userSpeakingActive = false;
                 this._userSpeakingHideTimer = null;
                 // Restore the voice state after user stops speaking
                 this.updateVoiceStateUI(this.currentVoiceState);
-            }, 1000);
+            }, 2000);
         }
     }
 
