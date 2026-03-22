@@ -1017,7 +1017,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
         debugLog('[Pre-Speak Hook] User is speaking — waiting for speech to finish...');
         const POLL_INTERVAL_MS = 100;
         const MAX_WAIT_MS = 10000; // 10 second safety timeout
-        const GRACE_PERIOD_MS = 500; // wait for finalized text after speech stops
+        const GRACE_PERIOD_MS = 2000; // wait for finalized text after speech stops
         const startTime = Date.now();
 
         // Wait for user to stop speaking
@@ -1036,15 +1036,34 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
           return { decision: 'approve' as const };
         }
 
-        // User stopped speaking — grace period to wait for finalized text
-        debugLog(`[Pre-Speak Hook] User stopped speaking after ${Date.now() - startTime}ms — waiting ${GRACE_PERIOD_MS}ms for finalized text...`);
-        await new Promise(resolve => setTimeout(resolve, GRACE_PERIOD_MS));
+        // User stopped speaking — poll for finalized text during grace period
+        debugLog(`[Pre-Speak Hook] User stopped speaking after ${Date.now() - startTime}ms — polling ${GRACE_PERIOD_MS}ms for finalized text...`);
+        const graceStart = Date.now();
+        while ((Date.now() - graceStart) < GRACE_PERIOD_MS) {
+          // Check for pending utterances on each poll
+          const blocked = dequeueAndBlock(s);
+          if (blocked) {
+            debugLog(`[Pre-Speak Hook] Finalized text arrived during grace period — blocking with utterances`);
+            return blocked;
+          }
+          // Also check if user started speaking again
+          if (serverAudioState.isUserSpeaking) {
+            debugLog('[Pre-Speak Hook] User started speaking again during grace period — resuming wait');
+            // Go back to waiting for speech to finish
+            while (serverAudioState.isUserSpeaking && (Date.now() - startTime) < MAX_WAIT_MS) {
+              await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+            }
+            // Reset grace period
+            break;
+          }
+          await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+        }
 
-        // Check if finalized utterances arrived during speech + grace period
-        const blocked = dequeueAndBlock(s);
-        if (blocked) {
+        // Final check after grace period
+        const finalBlocked = dequeueAndBlock(s);
+        if (finalBlocked) {
           debugLog(`[Pre-Speak Hook] Finalized text arrived — blocking with utterances`);
-          return blocked;
+          return finalBlocked;
         }
 
         // No finalized text — false alarm, approve speak
