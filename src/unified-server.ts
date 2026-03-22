@@ -1622,14 +1622,6 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       break;
     }
 
-    case 'user-speaking-start':
-      serverAudioState.setUserSpeaking(true);
-      break;
-
-    case 'user-speaking-stop':
-      serverAudioState.setUserSpeaking(false);
-      break;
-
     case 'ping':
       client.ws.send(JSON.stringify({ type: 'pong' }));
       break;
