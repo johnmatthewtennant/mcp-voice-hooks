@@ -98,8 +98,11 @@ func runSpeechRecognizer() async throws {
         attributeOptions: []
     )
 
-    // Get the best available audio format for the transcriber
-    guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+    // Create speech detector for voice activity detection
+    let detector = SpeechDetector()
+
+    // Get the best available audio format for both modules
+    guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber, detector]) else {
         fputs("[speech-recognizer] ERROR: No compatible audio format available. The speech model may not be installed.\n", stderr)
         fputs("[speech-recognizer] Try using Dictation in System Settings first to trigger model download.\n", stderr)
         exit(1)
@@ -107,8 +110,8 @@ func runSpeechRecognizer() async throws {
 
     fputs("[speech-recognizer] Target format: \(targetFormat)\n", stderr)
 
-    // Create analyzer and input stream
-    let analyzer = SpeechAnalyzer(modules: [transcriber])
+    // Create analyzer with both transcriber and detector
+    let analyzer = SpeechAnalyzer(modules: [transcriber, detector])
     let inputStream = makeAnalyzerInputStream(from: audioSource.stream, targetFormat: targetFormat)
 
     // Run everything concurrently
@@ -129,7 +132,7 @@ func runSpeechRecognizer() async throws {
 
         // Process transcription results
         group.addTask {
-            fputs("[speech-recognizer] Waiting for results...\n", stderr)
+            fputs("[speech-recognizer] Waiting for transcription results...\n", stderr)
             do {
                 for try await result in transcriber.results {
                     let text = String(result.text.characters)
@@ -144,7 +147,21 @@ func runSpeechRecognizer() async throws {
             } catch {
                 fputs("[speech-recognizer] Transcription error: \(error.localizedDescription)\n", stderr)
             }
-            fputs("[speech-recognizer] Results stream ended.\n", stderr)
+            fputs("[speech-recognizer] Transcription stream ended.\n", stderr)
+        }
+
+        // Process voice activity detection results
+        group.addTask {
+            fputs("[speech-recognizer] Waiting for VAD results...\n", stderr)
+            do {
+                for try await _ in detector.results {
+                    writeJSON(["type": "vad", "speaking": "true"])
+                }
+            } catch {
+                fputs("[speech-recognizer] VAD error: \(error.localizedDescription)\n", stderr)
+            }
+            writeJSON(["type": "vad", "speaking": "false"])
+            fputs("[speech-recognizer] VAD stream ended.\n", stderr)
         }
 
         await group.waitForAll()
