@@ -1205,6 +1205,12 @@ class MessengerClient {
                         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                     }
                     this.audioWs.send(pcm16.buffer);
+                } else if (e.data.type === 'vad') {
+                    // Audio-level VAD from the worklet — instant detection
+                    if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
+                        const msgType = e.data.speaking ? 'user-speaking-start' : 'user-speaking-stop';
+                        this.audioWs.send(JSON.stringify({ type: msgType }));
+                    }
                 }
             };
 
