@@ -218,9 +218,14 @@ class MessengerClient {
     }
 
     handleUserSpeaking(speaking) {
-        const indicator = document.getElementById('userSpeakingIndicator');
-        if (indicator) {
-            indicator.style.display = speaking ? 'block' : 'none';
+        const userIndicator = document.getElementById('userSpeakingIndicator');
+        const waitIndicator = document.getElementById('waitingIndicator');
+        if (userIndicator) {
+            userIndicator.style.display = speaking ? 'block' : 'none';
+        }
+        // Hide waiting indicator when user is speaking
+        if (waitIndicator && speaking) {
+            waitIndicator.style.display = 'none';
         }
     }
 
