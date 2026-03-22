@@ -17,6 +17,12 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
     this.ratio = sampleRate / this.targetRate;
     // Number of native-rate samples needed to produce one 20ms output frame (320 samples)
     this.inputFrameSize = Math.round(320 * this.ratio);
+    // VAD: audio power level tracking
+    this._speaking = false;
+    this._speakingThreshold = 0.01;  // RMS threshold for speech detection
+    this._silenceThreshold = 0.003;  // RMS threshold for silence (hysteresis, lowered to catch quiet speech)
+    this._silenceFrames = 0;
+    this._silenceFramesRequired = 560; // ~1.5s at 128 samples/frame @ 48kHz (128/48000 = 2.67ms/frame)
   }
 
   downsample(buffer, ratio) {
@@ -31,6 +37,30 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
   process(inputs) {
     const input = inputs[0]?.[0]; // mono channel
     if (!input) return true;
+
+    // VAD: compute RMS power of this frame
+    let sumSq = 0;
+    for (let i = 0; i < input.length; i++) {
+      sumSq += input[i] * input[i];
+    }
+    const rms = Math.sqrt(sumSq / input.length);
+
+    if (!this._speaking && rms > this._speakingThreshold) {
+      this._speaking = true;
+      this._silenceFrames = 0;
+      this.port.postMessage({ type: 'vad', speaking: true });
+    } else if (this._speaking) {
+      if (rms < this._silenceThreshold) {
+        this._silenceFrames++;
+        if (this._silenceFrames >= this._silenceFramesRequired) {
+          this._speaking = false;
+          this._silenceFrames = 0;
+          this.port.postMessage({ type: 'vad', speaking: false });
+        }
+      } else {
+        this._silenceFrames = 0;
+      }
+    }
 
     // Accumulate samples at native rate
     const newBuffer = new Float32Array(this.buffer.length + input.length);

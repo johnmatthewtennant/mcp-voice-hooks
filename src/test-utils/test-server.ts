@@ -201,6 +201,7 @@ export class TestServer {
   public speakWhitelist = new Map<string, { count: number; expiry: number; sessionKey: string }>();
   private whitelistTTL = 5000;
   public backgroundVoiceEnforcement = false;
+  public isUserSpeaking = false;
 
   constructor() {
     this.app = express();
@@ -803,13 +804,13 @@ export class TestServer {
     });
 
     // Pre-speak hook
-    this.app.post('/api/hooks/pre-speak', (req, res) => {
+    this.app.post('/api/hooks/pre-speak', async (req, res) => {
       const { key, sessionId, agentId, agentType } = this.parseCompositeKey(req.body);
       this.registerIfFirst(key);
       const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
       const speakText = req.body?.tool_input?.text;
 
-      // Active session: check for pending utterances, whitelist text
+      // Active session: check for pending utterances, wait if user speaking, whitelist text
       if (this.isActiveKey(key)) {
         const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
         if (pendingUtterances.length > 0) {
@@ -818,6 +819,51 @@ export class TestServer {
             reason: `There are ${pendingUtterances.length} pending utterances. Please dequeue them before speaking.`
           });
           return;
+        }
+
+        // Wait if user is speaking, then check for finalized text
+        if (this.isUserSpeaking) {
+          const POLL_INTERVAL_MS = 50;
+          const MAX_WAIT_MS = 10000;
+          const GRACE_PERIOD_MS = 500;
+          const startTime = Date.now();
+          while (this.isUserSpeaking && (Date.now() - startTime) < MAX_WAIT_MS) {
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+          }
+
+          // On timeout, still check for utterances before approving
+          if (this.isUserSpeaking) {
+            const pendingTimeout = session.queue.utterances.filter((u: any) => u.status === 'pending');
+            if (pendingTimeout.length > 0) {
+              const dequeued = pendingTimeout.map((u: any) => { u.status = 'delivered'; u.deliveredAt = new Date(); return u; });
+              const lines = dequeued.map((u: any) => `"${u.text}"`).join('\n');
+              res.json({ decision: 'block', reason: `Assistant received voice input from the user (${dequeued.length} utterance(s)):\n\n${lines}\n\npending` });
+              return;
+            }
+            // No utterances on timeout — approve
+            if (speakText) this.addToWhitelist(speakText, key);
+            res.json({ decision: 'approve' });
+            return;
+          }
+
+          // Grace period for finalized text
+          await new Promise(resolve => setTimeout(resolve, GRACE_PERIOD_MS));
+
+          // Check for pending utterances that arrived during speech
+          const pendingNow = session.queue.utterances.filter((u: any) => u.status === 'pending');
+          if (pendingNow.length > 0) {
+            // Dequeue and format inline
+            const dequeued = pendingNow.map((u: any) => {
+              u.status = 'delivered';
+              u.deliveredAt = new Date();
+              return u;
+            });
+            if (dequeued.length > 0) {
+              const lines = dequeued.map((u: any) => `"${u.text}"`).join('\n');
+              res.json({ decision: 'block', reason: `Assistant received voice input from the user (${dequeued.length} utterance(s)):\n\n${lines}\n\npending` });
+              return;
+            }
+          }
         }
 
         // Whitelist the text for the speak endpoint with session key

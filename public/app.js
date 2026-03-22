@@ -197,6 +197,8 @@ class MessengerClient {
                     this.audioPlayer.clear();
                 } else if (data.type === 'waitStatus') {
                     this.handleWaitStatus(data.isWaiting);
+                } else if (data.type === 'user-speaking') {
+                    this.handleUserSpeaking(data.speaking);
                 } else if (data.type === 'session-reset') {
                     // New Claude session started — re-sync our voice state with the server
                     console.log('[SSE] New Claude session detected, re-syncing voice state');
@@ -215,42 +217,66 @@ class MessengerClient {
         };
     }
 
-    handleWaitStatus(isWaiting) {
-        // Fallback handler for waitStatus SSE events.
-        // voice-state SSE events are now the primary driver for UI state.
-        const waitingIndicator = document.getElementById('waitingIndicator');
-        if (waitingIndicator) {
-            const wasAtBottom = this.isUserNearBottom();
-            waitingIndicator.style.display = isWaiting ? 'block' : 'none';
-            if (isWaiting && wasAtBottom) {
-                this.scrollToBottom();
+    handleUserSpeaking(speaking) {
+        this._userSpeakingActive = speaking;
+        if (speaking) {
+            // Show immediately, cancel any pending clear
+            if (this._userSpeakingHideTimer) {
+                clearTimeout(this._userSpeakingHideTimer);
+                this._userSpeakingHideTimer = null;
             }
+            this.updateStatusIndicator('user-speaking', '🎤 User speaking');
+        } else {
+            // Delay clearing by 2s to prevent flickering during natural speech pauses.
+            // The server debounces stop events by 1s, so we add extra buffer here
+            // to keep the indicator stable throughout natural inter-sentence pauses.
+            if (this._userSpeakingHideTimer) clearTimeout(this._userSpeakingHideTimer);
+            this._userSpeakingHideTimer = setTimeout(() => {
+                this._userSpeakingActive = false;
+                this._userSpeakingHideTimer = null;
+                // Restore the voice state after user stops speaking
+                this.updateVoiceStateUI(this.currentVoiceState);
+            }, 2000);
         }
     }
 
+    handleWaitStatus(isWaiting) {
+        // No-op — unified status indicator is now driven by updateVoiceStateUI
+    }
+
     updateVoiceStateUI(state) {
-        const waitingIndicator = document.getElementById('waitingIndicator');
-        if (!waitingIndicator) return;
+        // Don't override user-speaking indicator
+        if (this._userSpeakingActive) return;
+
+        if (state === 'listening') {
+            this.updateStatusIndicator('listening', 'Claude is waiting...');
+        } else if (state === 'processing') {
+            this.updateStatusIndicator('processing', 'Claude is processing...');
+        } else if (state === 'speaking') {
+            this.updateStatusIndicator('speaking', 'Claude is speaking...');
+        } else if (state === 'stopped') {
+            this.updateStatusIndicator('stopped', 'Claude\'s turn ended');
+        } else if (state === 'inactive') {
+            this.updateStatusIndicator('idle', 'Idle');
+        } else {
+            this.updateStatusIndicator('idle', 'Idle');
+        }
+    }
+
+    updateStatusIndicator(className, text) {
+        const indicator = document.getElementById('statusIndicator');
+        if (!indicator) return;
 
         const wasAtBottom = this.isUserNearBottom();
 
-        if (state === 'listening') {
-            waitingIndicator.textContent = 'Claude is waiting...';
-            waitingIndicator.style.display = 'block';
-        } else if (state === 'processing') {
-            waitingIndicator.textContent = 'Claude is processing...';
-            waitingIndicator.style.display = 'block';
-        } else if (state === 'speaking') {
-            waitingIndicator.textContent = 'Claude is speaking...';
-            waitingIndicator.style.display = 'block';
-        } else if (state === 'stopped') {
-            waitingIndicator.textContent = 'Claude\'s turn ended';
-            waitingIndicator.style.display = 'block';
-        } else {
-            waitingIndicator.style.display = 'none';
+        // Remove all state classes
+        indicator.className = 'status-indicator';
+        if (className) {
+            indicator.classList.add(className);
         }
+        indicator.textContent = text;
 
-        if (state !== 'inactive' && wasAtBottom) {
+        if (text && wasAtBottom) {
             this.scrollToBottom();
         }
     }
@@ -610,7 +636,7 @@ class MessengerClient {
         });
 
         // Get waiting indicator to insert messages before it
-        const waitingIndicator = container.querySelector('.waiting-indicator');
+        const statusIndicator = container.querySelector('.status-indicator');
 
         // Check if user is near bottom before adding content
         const wasAtBottom = this.isUserNearBottom();
@@ -618,10 +644,10 @@ class MessengerClient {
         // Only render new messages and update status for existing ones
         messages.forEach(message => {
             if (!existingIds.has(message.id)) {
-                // New message - create bubble and insert before waiting indicator
+                // New message - create bubble and insert before status indicator
                 const bubble = this.createMessageBubble(message);
-                if (waitingIndicator) {
-                    container.insertBefore(bubble, waitingIndicator);
+                if (statusIndicator) {
+                    container.insertBefore(bubble, statusIndicator);
                 } else {
                     container.appendChild(bubble);
                 }
@@ -797,6 +823,7 @@ class MessengerClient {
             this.connectAudioWebSocket();
 
             // Start browser speech recognition only if NOT using server recognition
+            // (worklet audio-level VAD handles voice activity detection for server mode)
             if (!this.useServerRecognition && this.recognition) {
                 this.recognition.start();
             }
@@ -872,6 +899,8 @@ class MessengerClient {
                 this.autoGrowTextarea();
             }
         };
+
+        // Browser STT VAD removed — worklet audio-level VAD handles this now
 
         this.recognition.onerror = (event) => {
             if (event.error !== 'no-speech') {
@@ -1164,6 +1193,12 @@ class MessengerClient {
                         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                     }
                     this.audioWs.send(pcm16.buffer);
+                } else if (e.data.type === 'vad') {
+                    // Audio-level VAD from the worklet — instant detection
+                    if (this.audioWs && this.audioWs.readyState === WebSocket.OPEN) {
+                        const msgType = e.data.speaking ? 'user-speaking-start' : 'user-speaking-stop';
+                        this.audioWs.send(JSON.stringify({ type: msgType }));
+                    }
                 }
             };
 

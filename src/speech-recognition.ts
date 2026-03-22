@@ -10,6 +10,11 @@ interface TranscriptResult {
   text: string;
 }
 
+interface VadResult {
+  type: 'vad';
+  speaking: string;
+}
+
 /**
  * Wraps the Swift speech-recognizer binary as a child process.
  * Reads PCM16 LE 16kHz mono audio from feedAudio() and emits
@@ -46,9 +51,13 @@ export class SpeechRecognizer extends EventEmitter {
     const rl = createInterface({ input: this.process.stdout! });
     rl.on('line', (line: string) => {
       try {
-        const result = JSON.parse(line) as TranscriptResult;
-        if (result.type === 'interim' || result.type === 'final') {
-          this.emit('transcript', result);
+        const parsed = JSON.parse(line);
+        if (parsed.type === 'interim' || parsed.type === 'final') {
+          this.emit('transcript', parsed as TranscriptResult);
+        } else if (parsed.type === 'vad') {
+          const speaking = (parsed as VadResult).speaking === 'true';
+          this.emit('vad', speaking);
+          debugLog(`[SpeechRecognizer] VAD: speaking=${speaking}`);
         }
       } catch (err) {
         debugLog('[SpeechRecognizer] Failed to parse stdout line:', line, err);

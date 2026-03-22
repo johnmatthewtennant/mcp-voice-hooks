@@ -339,6 +339,8 @@ class ServerAudioState {
   private _lastWaitStatus = false;
   private _ttsActive = false;
   private _hookActive = false;
+  private _userSpeaking = false;
+  private _userSpeakingDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _pulseTimer: ReturnType<typeof setInterval> | null = null;
 
   syncState(): void {
@@ -396,9 +398,52 @@ class ServerAudioState {
     this.syncState();
   }
 
+  get isUserSpeaking(): boolean {
+    return this._userSpeaking;
+  }
+
+  setUserSpeaking(active: boolean): void {
+    // Clear any pending debounce timer
+    if (this._userSpeakingDebounceTimer) {
+      clearTimeout(this._userSpeakingDebounceTimer);
+      this._userSpeakingDebounceTimer = null;
+    }
+
+    if (active) {
+      // User started speaking — set immediately
+      if (!this._userSpeaking) {
+        debugLog('[ServerAudio] userSpeaking = true');
+        this._userSpeaking = true;
+        this.onUserSpeakingChange?.(true);
+      }
+    } else {
+      // User stopped speaking — debounce 1s as safety buffer.
+      // The worklet already applies 1.5s silence detection, but the server
+      // needs a buffer to avoid race conditions with pre-speak hook checks.
+      if (this._userSpeakingDebounceTimer) {
+        clearTimeout(this._userSpeakingDebounceTimer);
+      }
+      this._userSpeakingDebounceTimer = setTimeout(() => {
+        this._userSpeakingDebounceTimer = null;
+        if (this._userSpeaking) {
+          debugLog('[ServerAudio] userSpeaking = false (debounced 1s)');
+          this._userSpeaking = false;
+          this.onUserSpeakingChange?.(false);
+        }
+      }, 1000);
+    }
+    this.syncState();
+  }
+
+  // No server-side silence timeout — we rely entirely on browser worklet VAD
+  // for stop events. WebSocket disconnect handler clears speaking state as a safety net.
+
   // Callback for broadcasting state changes to SSE clients.
   // Set after ttsClients is initialised (see broadcastVoiceState helper).
   onStateChange: ((state: string) => void) | null = null;
+
+  // Callback for broadcasting userSpeaking changes to SSE clients.
+  onUserSpeakingChange: ((speaking: boolean) => void) | null = null;
 
   private _transition(newState: typeof this.state): void {
     const oldState = this.state;
@@ -918,28 +963,27 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 });
 
 // Unified hook handler
+// Dequeue pending utterances and return a block response if any exist.
+// Returns null if no pending utterances.
+function dequeueAndBlock(s: SessionState): { decision: 'block', reason: string } | null {
+  const pending = s.queue.utterances.filter(u => u.status === 'pending');
+  if (pending.length === 0) return null;
+
+  const result = dequeueUtterancesCore(s);
+  if (result.success && result.utterances && result.utterances.length > 0) {
+    const reversed = result.utterances.reverse();
+    return { decision: 'block', reason: formatVoiceUtterances(reversed) };
+  }
+  return null;
+}
+
 function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool', session?: SessionState): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
   const s = session || getActiveSessionOrFirst();
   const voiceActive = voicePreferences.voiceActive;
 
   // 1. Check for pending utterances and auto-dequeue
-  // Always check for pending utterances regardless of voiceActive
-  // This allows typed messages to be dequeued even when mic is off
-  const pendingUtterances = s.queue.utterances.filter(u => u.status === 'pending');
-  if (pendingUtterances.length > 0) {
-    // Always dequeue (dequeueUtterancesCore no longer requires voiceActive)
-    const dequeueResult = dequeueUtterancesCore(s);
-
-    if (dequeueResult.success && dequeueResult.utterances && dequeueResult.utterances.length > 0) {
-      // Reverse to show oldest first
-      const reversedUtterances = dequeueResult.utterances.reverse();
-
-      return {
-        decision: 'block',
-        reason: formatVoiceUtterances(reversedUtterances)
-      };
-    }
-  }
+  const blocked = dequeueAndBlock(s);
+  if (blocked) return blocked;
 
   // 2. Check for delivered utterances (when voice enabled)
   if (voiceActive) {
@@ -962,8 +1006,70 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
     return { decision: 'approve' };
   }
 
-  // 4. Handle speak
+  // 4. Handle speak — block while user is speaking, then check for finalized text
   if (attemptedAction === 'speak') {
+    if (serverAudioState.isUserSpeaking) {
+      return (async () => {
+        debugLog('[Pre-Speak Hook] User is speaking — waiting for speech to finish...');
+        const POLL_INTERVAL_MS = 100;
+        const MAX_WAIT_MS = 10000; // 10 second safety timeout
+        const GRACE_PERIOD_MS = 2000; // wait for finalized text after speech stops
+        const startTime = Date.now();
+
+        // Outer loop: handles user resuming speech during grace period
+        // by going back to wait-for-silence → grace-period cycle
+        while ((Date.now() - startTime) < MAX_WAIT_MS) {
+          // Wait for user to stop speaking
+          while (serverAudioState.isUserSpeaking && (Date.now() - startTime) < MAX_WAIT_MS) {
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+          }
+
+          if (serverAudioState.isUserSpeaking) {
+            debugLog('[Pre-Speak Hook] Timed out waiting for user to stop speaking — checking for utterances before approving');
+            const timedOutBlock = dequeueAndBlock(s);
+            if (timedOutBlock) {
+              debugLog('[Pre-Speak Hook] Found utterances after timeout — blocking');
+              return timedOutBlock;
+            }
+            return { decision: 'approve' as const };
+          }
+
+          // User stopped speaking — poll for finalized text during grace period
+          debugLog(`[Pre-Speak Hook] User stopped speaking after ${Date.now() - startTime}ms — polling ${GRACE_PERIOD_MS}ms for finalized text...`);
+          const graceStart = Date.now();
+          let userResumedSpeaking = false;
+
+          while ((Date.now() - graceStart) < GRACE_PERIOD_MS && (Date.now() - startTime) < MAX_WAIT_MS) {
+            const blocked = dequeueAndBlock(s);
+            if (blocked) {
+              debugLog(`[Pre-Speak Hook] Finalized text arrived during grace period — blocking with utterances`);
+              return blocked;
+            }
+            // If user starts speaking again, restart the whole cycle
+            if (serverAudioState.isUserSpeaking) {
+              debugLog('[Pre-Speak Hook] User started speaking again during grace period — restarting wait cycle');
+              userResumedSpeaking = true;
+              break;
+            }
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+          }
+
+          // If user didn't resume, grace period completed — do final check and exit
+          if (!userResumedSpeaking) break;
+        }
+
+        // Final check after grace period
+        const finalBlocked = dequeueAndBlock(s);
+        if (finalBlocked) {
+          debugLog(`[Pre-Speak Hook] Finalized text arrived — blocking with utterances`);
+          return finalBlocked;
+        }
+
+        // No finalized text — false alarm, approve speak
+        debugLog('[Pre-Speak Hook] No finalized text after grace period — approving speak');
+        return { decision: 'approve' as const };
+      })();
+    }
     return { decision: 'approve' };
   }
 
@@ -1157,7 +1263,7 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
 });
 
 // Pre-speak hook endpoint
-app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
+app.post('/api/hooks/pre-speak', async (req: Request, res: Response) => {
   logHookRequest(req, 'pre-speak');
   const { key, session } = parseHookRequest(req);
   registerIfFirst(key);
@@ -1166,9 +1272,9 @@ app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
 
   // Active session: approve and whitelist the text
   if (isActiveKey(key)) {
-    const result = handleHookRequest('speak', session);
+    const result = await handleHookRequest('speak', session);
     // If approved and we have text, add to whitelist
-    if (speakText && (result as any).decision !== 'block') {
+    if (speakText && result.decision !== 'block') {
       addToWhitelist(speakText, key);
     }
     res.json(result);
@@ -1368,8 +1474,20 @@ function broadcastVoiceState(state: string): void {
   });
 }
 
-// Wire up the ServerAudioState callback now that ttsClients exists
+// Wire up the ServerAudioState callbacks now that ttsClients exists
 serverAudioState.onStateChange = broadcastVoiceState;
+serverAudioState.onUserSpeakingChange = (speaking: boolean) => {
+  const message = JSON.stringify({
+    type: 'user-speaking',
+    speaking,
+    sessionKey: activeCompositeKey
+  });
+  ttsClients.forEach((viewingKey, client) => {
+    if (viewingKey === null || viewingKey === activeCompositeKey) {
+      client.write(`data: ${message}\n\n`);
+    }
+  });
+};
 
 
 // ── WebSocket audio endpoint ──────────────────────────────────────────
@@ -1522,6 +1640,16 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       break;
     }
 
+    case 'user-speaking-start':
+      serverAudioState.setUserSpeaking(true);
+      debugLog('[WS] Browser VAD: user speaking start');
+      break;
+
+    case 'user-speaking-stop':
+      serverAudioState.setUserSpeaking(false);
+      debugLog('[WS] Browser VAD: user speaking stop');
+      break;
+
     case 'ping':
       client.ws.send(JSON.stringify({ type: 'pong' }));
       break;
@@ -1542,15 +1670,32 @@ function startRecognizerForClient(client: WsAudioClient): void {
   const repoRoot = path.join(__dirname, '..');
   const recognizer = new SpeechRecognizer(repoRoot);
 
+  // VAD events supplement interim-based detection
+  recognizer.on('vad', (speaking: boolean) => {
+    if (speaking) {
+      serverAudioState.setUserSpeaking(true);
+    }
+    // Don't clear on VAD false — let the final transcript or silence timeout handle that
+    debugLog(`[SpeechRecognizer] VAD event: speaking=${speaking}`);
+  });
+
   recognizer.on('transcript', (result: { type: string; text: string }) => {
     if (client.ws.readyState !== WebSocket.OPEN) return;
 
     if (result.type === 'interim') {
+      // Interim results also signal user is speaking
+      serverAudioState.setUserSpeaking(true);
       client.ws.send(JSON.stringify({
         type: 'transcript-interim',
         text: result.text,
       }));
-    } else if (result.type === 'final' && result.text.trim()) {
+    } else if (result.type === 'final') {
+      // NOTE: Do NOT call setUserSpeaking(false) here. A "final" transcript means a
+      // segment was finalized by the recognizer, but the user may still be mid-thought
+      // (e.g., "Please fix the bug" finalizes while they continue "...in the login page").
+      // Rely on the browser worklet VAD (audio-level silence detection) as the sole
+      // authority for when the user actually stops speaking.
+      if (!result.text.trim()) return; // Empty final — ignore
       const utteranceId = randomUUID();
       // Create utterance in the selected session (from WS client), falling back to active
       const selectedKey = (client as any).selectedSessionKey;
@@ -1569,12 +1714,14 @@ function startRecognizerForClient(client: WsAudioClient): void {
 
   recognizer.on('error', (err: Error) => {
     debugLog(`[SpeechRecognizer] Error: ${err.message}`);
+    serverAudioState.setUserSpeaking(false); // Clear speaking state on error
     if (client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(JSON.stringify({ type: 'error', message: `Speech recognition error: ${err.message}` }));
     }
   });
 
   recognizer.on('exit', (_code: number | null, _signal: string | null) => {
+    serverAudioState.setUserSpeaking(false); // Clear speaking state on exit
     // If the client is still capturing and recognizer crashed, it will auto-restart
     // via the SpeechRecognizer class. We just need to re-assign when it restarts.
   });

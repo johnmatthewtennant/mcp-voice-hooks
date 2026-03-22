@@ -157,14 +157,35 @@
             font-size: 16px;
         }
 
-        /* Waiting Indicator */
-        .waiting-indicator {
+        /* Unified Status Indicator — always visible */
+        .status-indicator {
             text-align: center;
-            color: #999;
-            font-size: 14px;
-            font-style: italic;
-            padding: 12px 20px;
+            font-size: 13px;
+            padding: 6px 20px;
             margin-top: 8px;
+            min-height: 20px;
+            color: #999;
+            font-style: italic;
+        }
+        .status-indicator.user-speaking {
+            color: #e74c3c;
+            font-weight: bold;
+            font-style: normal;
+        }
+        .status-indicator.listening {
+            color: #999;
+        }
+        .status-indicator.processing {
+            color: #f39c12;
+        }
+        .status-indicator.speaking {
+            color: #3498db;
+        }
+        .status-indicator.stopped {
+            color: #999;
+        }
+        .status-indicator.idle {
+            color: #666;
         }
 
         /* Message Bubbles */
@@ -909,9 +930,7 @@
                             </svg>
                             <p id="emptyStateMessage">No messages yet. Type or speak to start the conversation!</p>
                         </div>
-                        <div id="waitingIndicator" class="waiting-indicator" style="display: none;">
-                            Claude is waiting...
-                        </div>
+                        <div id="statusIndicator" class="status-indicator idle">Idle</div>
                     </div>
                 </div>
             </div>
