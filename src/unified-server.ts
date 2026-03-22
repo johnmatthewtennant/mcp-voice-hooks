@@ -1098,14 +1098,10 @@ function registerIfFirst(key: string): void {
         // Subagent sessions should NOT steal focus from the lead session
         debugLog(`[Session] Subagent hook ignored for active switch: ${key} (active stays ${activeCompositeKey})`);
       } else {
-        // New Claude instance (restart or new project) — switch active
-        const oldKey = activeCompositeKey;
-        activeCompositeKey = key;
-        debugLog(`[Session] New Claude session detected: ${oldKey} → ${key}`);
-        setVoiceActive(false);
-        serverAudioState.clearHookActiveSilent();
-        debugLog(`[Session] Voice state reset for new session`);
-        notifySessionReset();
+        // Different non-subagent session — never steal active. The first session
+        // that registers owns the active slot for the server's lifetime.
+        // Use the /api/sessions/active endpoint to switch manually if needed.
+        debugLog(`[Session] New session ${key} ignored — active session already set (active stays ${activeCompositeKey})`);
       }
     }
   }
