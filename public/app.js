@@ -993,6 +993,10 @@ class MessengerClient {
             console.log('[WS] Connected');
             this.wsConnected = true;
             this.wsReconnectDelay = 1000; // Reset backoff on successful connect
+            // Sync browser's selected session to server on WS connect/reconnect
+            if (this.selectedSessionKey) {
+                this.audioWs.send(JSON.stringify({ type: 'select-session', sessionKey: this.selectedSessionKey }));
+            }
             // Start audio capture now that the WS connection is ready
             this.startAudioCapture();
         };
