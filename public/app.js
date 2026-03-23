@@ -150,8 +150,8 @@ class MessengerClient {
 
         // Session state
         this.sessions = [];
-        this.activeSessionKey = null;       // Server's active key (for hooks/TTS routing)
-        this.selectedSessionKey = null;     // User's UI selection (which tab they're viewing)
+        this.activeSessionKey = null;       // Server's selected key (for backward compat with API responses)
+        this.selectedSessionKey = null;     // User's UI selection — authoritative for all routing
         this.unreadCounts = {}; // key → count of messages since last viewed
 
         // Initialize

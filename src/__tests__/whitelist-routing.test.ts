@@ -28,7 +28,7 @@ describe('Pre-speak whitelist and multi-session routing', () => {
       const data = await res.json() as any;
       expect(data.decision).toBe('approve');
       // session-A is now active
-      expect(server.activeCompositeKey).toBe(JSON.stringify(['session-A', 'main']));
+      expect(server.selectedSessionKey).toBe(JSON.stringify(['session-A', 'main']));
     });
 
     it('second session_id is inactive', async () => {
@@ -107,7 +107,7 @@ describe('Pre-speak whitelist and multi-session routing', () => {
     });
 
     it('speak endpoint returns success for non-whitelisted text (inactive session)', async () => {
-      // Activate a session first (so activeCompositeKey is set)
+      // Activate a session first (so selectedSessionKey is set)
       await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -175,15 +175,15 @@ describe('Pre-speak whitelist and multi-session routing', () => {
       expect(data3.respondedCount).toBe(0);
     });
 
-    it('pre-speak for inactive session approves and stores in history', async () => {
-      // Set main agent as active
+    it('pre-speak for background session approves and whitelists text', async () => {
+      // Set main agent as selected
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: 'session-A' }),
       });
 
-      // subagent tries to speak
+      // subagent tries to speak — should be whitelisted (not blocked)
       const res = await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -196,12 +196,8 @@ describe('Pre-speak whitelist and multi-session routing', () => {
       const data = await res.json() as any;
       expect(data.decision).toBe('approve');
 
-      // Verify text was stored in subagent-B's conversation history
-      const sessionBKey = JSON.stringify(['session-A', 'subagent-B']);
-      const sessionB = server.sessions.get(sessionBKey);
-      expect(sessionB).toBeDefined();
-      const assistantMessages = sessionB!.queue.messages.filter(m => m.role === 'assistant');
-      expect(assistantMessages.some(m => m.text === 'I am subagent B')).toBe(true);
+      // Verify text was whitelisted (all sessions now get whitelisted)
+      expect(server.speakWhitelist.has('I am subagent B')).toBe(true);
     });
   });
 
@@ -288,7 +284,7 @@ describe('Pre-speak whitelist and multi-session routing', () => {
       const data = await res.json() as any;
       expect(data.decision).toBe('approve');
       // Should have created a default key
-      expect(server.activeCompositeKey).toBe(JSON.stringify(['default', 'main']));
+      expect(server.selectedSessionKey).toBe(JSON.stringify(['default', 'main']));
     });
   });
 });

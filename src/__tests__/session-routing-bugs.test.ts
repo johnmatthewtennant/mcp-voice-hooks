@@ -32,7 +32,7 @@ describe('Session routing bug fixes', () => {
       expect(defaultSession).toBeUndefined();
     });
 
-    it('registerIfFirst upgrades from default to real session', async () => {
+    it('autoSelectIfNone upgrades from default to real session', async () => {
       // First, create a default session by calling a browser endpoint (no hooks yet)
       await fetch(`${server.url}/api/potential-utterances`, {
         method: 'POST',
@@ -49,7 +49,7 @@ describe('Session routing bug fixes', () => {
 
       // The active session should now be the real session, not default
       const realKey = JSON.stringify(['real-session', 'main']);
-      expect(server.activeCompositeKey).toBe(realKey);
+      expect(server.selectedSessionKey).toBe(realKey);
     });
 
     it('default session does not become active when real session already active', async () => {
@@ -61,7 +61,7 @@ describe('Session routing bug fixes', () => {
       });
 
       const realKey = JSON.stringify(['real-session', 'main']);
-      expect(server.activeCompositeKey).toBe(realKey);
+      expect(server.selectedSessionKey).toBe(realKey);
 
       // Call browser endpoints that would previously create/return default session
       await fetch(`${server.url}/api/utterances`);
@@ -69,7 +69,7 @@ describe('Session routing bug fixes', () => {
       await fetch(`${server.url}/api/utterances/status`);
 
       // Active should still be the real session
-      expect(server.activeCompositeKey).toBe(realKey);
+      expect(server.selectedSessionKey).toBe(realKey);
     });
   });
 
@@ -118,7 +118,7 @@ describe('Session routing bug fixes', () => {
         body: JSON.stringify({ text: 'Response from A' }),
       });
 
-      // Subagent speaks (inactive, stored in subagent's history)
+      // Subagent pre-speak whitelists text (all sessions now whitelist)
       await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -127,6 +127,13 @@ describe('Session routing bug fixes', () => {
           agent_id: 'subagent-B',
           tool_input: { text: 'Response from B' },
         }),
+      });
+
+      // Subagent speaks — stored in subagent's conversation history via speak endpoint
+      await fetch(`${server.url}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'Response from B' }),
       });
 
       // Verify main agent has its messages (user + assistant)
