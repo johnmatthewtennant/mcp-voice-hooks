@@ -69,7 +69,7 @@ async function processTtsQueue() {
   try {
     const { audioId, filePath } = await renderTtsToFile(item.text, item.rate);
     // Check if a WS client is connected for this session — prefer WS delivery
-    const targetKey = item.sessionKey || activeCompositeKey;
+    const targetKey = item.sessionKey || selectedSessionKey;
     const wsClient = findWsClientForSession(targetKey);
     if (wsClient && wsClient.ws.readyState === WebSocket.OPEN) {
       serverAudioState.setTtsActive(true);
@@ -470,7 +470,7 @@ class ServerAudioState {
     if (!filePath) return;
 
     // Find a connected WS client to stream to
-    const targetKey = activeCompositeKey;
+    const targetKey = selectedSessionKey;
     const wsClient = findWsClientForSession(targetKey);
     if (!wsClient || wsClient.ws.readyState !== WebSocket.OPEN) return;
 
@@ -520,7 +520,10 @@ interface SessionState {
 }
 
 const sessions = new Map<string, SessionState>();
-let activeCompositeKey: string | null = null;
+// The server's selected session key — driven by browser selection.
+// Auto-set to the first session that registers (before browser connects),
+// then updated by browser's 'select-session' WS message.
+let selectedSessionKey: string | null = null;
 
 const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minute TTL
 
@@ -544,12 +547,12 @@ function getOrCreateSession(key: string, sessionId?: string, agentId?: string | 
   return session;
 }
 
-function getActiveSession(): SessionState | null {
-  if (activeCompositeKey) {
-    const session = sessions.get(activeCompositeKey);
+function getSelectedSession(): SessionState | null {
+  if (selectedSessionKey) {
+    const session = sessions.get(selectedSessionKey);
     if (session) return session;
   }
-  // No active session set — only return default if no real sessions exist
+  // No selected session — only return default if no real sessions exist
   const hasRealSessions = Array.from(sessions.values()).some(s => s.sessionId !== 'default');
   if (!hasRealSessions) {
     const defaultKey = compositeKey('default');
@@ -567,9 +570,9 @@ function getSessionFromRequest(req: Request): SessionState {
   return getActiveSessionOrFirst();
 }
 
-// Get active session or return a 404-like response for browser endpoints
+// Get selected session or return a fallback for browser endpoints
 function getActiveSessionOrFirst(): SessionState {
-  const active = getActiveSession();
+  const active = getSelectedSession();
   if (active) return active;
   // If there are real sessions but none is active, return the first one
   const first = sessions.values().next().value;
@@ -585,8 +588,8 @@ function cleanupSessions(): void {
   for (const [key, session] of sessions) {
     if (now - session.lastActivity.getTime() > SESSION_TTL_MS) {
       sessions.delete(key);
-      const wasActive = key === activeCompositeKey;
-      if (wasActive) activeCompositeKey = null;
+      const wasActive = key === selectedSessionKey;
+      if (wasActive) selectedSessionKey = null;
       debugLog(`[Session] TTL cleanup: key=${key} lastActivity=${session.lastActivity.toISOString()}`);
     }
   }
@@ -1038,72 +1041,53 @@ function parseHookRequest(req: Request): { key: string; sessionId: string; agent
   return { key, sessionId, agentId, session };
 }
 
-// Pure check: is this key the active session?
-function isActiveKey(key: string): boolean {
-  return activeCompositeKey !== null && key === activeCompositeKey;
+// Pure check: is this key the browser-selected session?
+function isSelectedKey(key: string): boolean {
+  return selectedSessionKey !== null && key === selectedSessionKey;
 }
 
-// Register the first session seen as active (separated from isActiveKey to avoid side effects)
-function registerIfFirst(key: string): void {
-  if (activeCompositeKey === null) {
-    activeCompositeKey = key;
-    debugLog(`[Session] Active changed: ${null} → ${key}`);
+// Auto-select the first session that registers, only if no session is selected yet.
+// This handles voice input arriving before the browser connects.
+// Once the browser connects, it takes over via 'select-session' WS message.
+function autoSelectIfNone(key: string): void {
+  if (selectedSessionKey === null) {
+    selectedSessionKey = key;
+    debugLog(`[Session] Auto-selected (first session): ${key}`);
 
     // Check if there's a default session with data that should be migrated
     const parsed = JSON.parse(key) as [string, string];
     const newSessionId = parsed[0];
     if (newSessionId !== 'default') {
-      const defaultKey = compositeKey('default');
-      const defaultSession = sessions.get(defaultKey);
-      if (defaultSession && (defaultSession.queue.utterances.length > 0 || defaultSession.queue.messages.length > 0)) {
-        const newSession = getOrCreateSession(key, newSessionId, null, null);
-        for (const utterance of defaultSession.queue.utterances) {
-          newSession.queue.utterances.push(utterance);
-        }
-        for (const message of defaultSession.queue.messages) {
-          newSession.queue.messages.push(message);
-        }
-        debugLog(`[Session] Migrated ${defaultSession.queue.utterances.length} utterance(s) and ${defaultSession.queue.messages.length} message(s) from default → ${key}`);
-        defaultSession.queue.utterances = [];
-        defaultSession.queue.messages = [];
-      }
+      migrateDefaultSession(key, newSessionId);
     }
-  } else {
-    const currentActive = sessions.get(activeCompositeKey);
+  } else if (selectedSessionKey) {
+    // If current selection is a default session and this is a real session, upgrade
+    const currentSelected = sessions.get(selectedSessionKey);
     const parsed = JSON.parse(key) as [string, string];
     const newSessionId = parsed[0];
-
-    if (currentActive && currentActive.sessionId === 'default' && newSessionId !== 'default') {
-      // If the current active is a default session and this is a real session, upgrade.
-      // Migrate messages from the default session to the new session.
-      const newSession = getOrCreateSession(key, newSessionId, null, null);
-      if (currentActive.queue.utterances.length > 0 || currentActive.queue.messages.length > 0) {
-        for (const utterance of currentActive.queue.utterances) {
-          newSession.queue.utterances.push(utterance);
-        }
-        for (const message of currentActive.queue.messages) {
-          newSession.queue.messages.push(message);
-        }
-        currentActive.queue.utterances = [];
-        currentActive.queue.messages = [];
-        debugLog(`[Session] Migrated ${newSession.queue.utterances.length} utterance(s) and ${newSession.queue.messages.length} message(s) from default → ${key}`);
-      }
-      activeCompositeKey = key;
-      debugLog(`[Session] Active upgraded from default → ${key}`);
-    } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
-      // Different session_id — only switch if it's NOT a subagent of the current session
-      const incomingSession = sessions.get(key);
-      const isSubagent = incomingSession?.agentId && incomingSession.agentId !== 'main';
-      if (isSubagent) {
-        // Subagent sessions should NOT steal focus from the lead session
-        debugLog(`[Session] Subagent hook ignored for active switch: ${key} (active stays ${activeCompositeKey})`);
-      } else {
-        // Different non-subagent session — never steal active. The first session
-        // that registers owns the active slot for the server's lifetime.
-        // Use the /api/sessions/active endpoint to switch manually if needed.
-        debugLog(`[Session] New session ${key} ignored — active session already set (active stays ${activeCompositeKey})`);
-      }
+    if (currentSelected && currentSelected.sessionId === 'default' && newSessionId !== 'default') {
+      migrateDefaultSession(key, newSessionId);
+      selectedSessionKey = key;
+      debugLog(`[Session] Auto-selected (upgraded from default): ${key}`);
     }
+  }
+}
+
+// Migrate utterances and messages from the default session to a new session
+function migrateDefaultSession(newKey: string, newSessionId: string): void {
+  const defaultKey = compositeKey('default');
+  const defaultSession = sessions.get(defaultKey);
+  if (defaultSession && (defaultSession.queue.utterances.length > 0 || defaultSession.queue.messages.length > 0)) {
+    const newSession = getOrCreateSession(newKey, newSessionId, null, null);
+    for (const utterance of defaultSession.queue.utterances) {
+      newSession.queue.utterances.push(utterance);
+    }
+    for (const message of defaultSession.queue.messages) {
+      newSession.queue.messages.push(message);
+    }
+    debugLog(`[Session] Migrated ${defaultSession.queue.utterances.length} utterance(s) and ${defaultSession.queue.messages.length} message(s) from default → ${newKey}`);
+    defaultSession.queue.utterances = [];
+    defaultSession.queue.messages = [];
   }
 }
 
@@ -1113,18 +1097,18 @@ function logHookRequest(req: Request, endpoint: string): void {
   const agentId = req.body?.agent_id || null;
   const key = compositeKey(sessionId, agentId);
   const toolName = req.body?.tool_name;
-  const active = isActiveKey(key) ? 'active' : 'inactive';
-  debugLog(`[Hook] ${endpoint}: key=${key} active=${active === 'active'} tool=${toolName || 'n/a'}`);
+  const selected = isSelectedKey(key) ? 'selected' : 'background';
+  debugLog(`[Hook] ${endpoint}: key=${key} selected=${selected === 'selected'} tool=${toolName || 'n/a'}`);
 }
 
 // Dedicated hook endpoints that return in Claude's expected format
 app.post('/api/hooks/stop', async (req: Request, res: Response) => {
   logHookRequest(req, 'stop');
   const { key, session } = parseHookRequest(req);
-  registerIfFirst(key);
+  autoSelectIfNone(key);
 
-  // Inactive session (subagent): enforce "must speak after tool use" only when background enforcement is explicitly enabled
-  if (!isActiveKey(key)) {
+  // Background session (not browser-selected): enforce "must speak after tool use" only when background enforcement is enabled
+  if (!isSelectedKey(key)) {
     const enforceSpeak = backgroundVoiceEnforcement;
     if (enforceSpeak && session.lastToolUseTimestamp &&
       (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
@@ -1134,7 +1118,7 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
       });
       return;
     }
-    debugLog(`[Hook] stop: key=${key} active=false (approve)`);
+    debugLog(`[Hook] stop: key=${key} selected=false (approve)`);
     res.json({ decision: 'approve' });
     return;
   }
@@ -1157,45 +1141,33 @@ app.post('/api/hooks/stop', async (req: Request, res: Response) => {
 });
 
 // Pre-speak hook endpoint
+// All sessions get whitelisted for TTS — the /api/speak endpoint decides
+// whether to actually play audio based on which session the browser has selected.
 app.post('/api/hooks/pre-speak', (req: Request, res: Response) => {
   logHookRequest(req, 'pre-speak');
   const { key, session } = parseHookRequest(req);
-  registerIfFirst(key);
+  autoSelectIfNone(key);
   const toolInput = req.body?.tool_input;
   const speakText = toolInput?.text;
 
-  // Active session: approve and whitelist the text
-  if (isActiveKey(key)) {
-    const result = handleHookRequest('speak', session);
-    // If approved and we have text, add to whitelist
-    if (speakText && (result as any).decision !== 'block') {
-      addToWhitelist(speakText, key);
-    }
-    res.json(result);
-    return;
+  const result = handleHookRequest('speak', session);
+  // If approved and we have text, always whitelist (regardless of selected session)
+  if (speakText && (result as any).decision !== 'block') {
+    addToWhitelist(speakText, key);
   }
-
-  // Inactive session: store in that session's conversation history, approve without TTS
-  if (speakText) {
-    session.queue.addAssistantMessage(speakText);
-    session.lastSpeakTimestamp = new Date();
-    debugLog(`[Speak] Stored for inactive session: key=${key} text="${speakText.slice(0, 30)}..."`);
-  }
-  res.json({
-    decision: 'approve',
-  });
+  res.json(result);
 });
 
 // Post-tool hook endpoint
 app.post('/api/hooks/post-tool', (req: Request, res: Response) => {
   logHookRequest(req, 'post-tool');
   const { key, session } = parseHookRequest(req);
-  registerIfFirst(key);
+  autoSelectIfNone(key);
 
-  // Inactive session: still track tool use but don't route voice
-  if (!isActiveKey(key)) {
+  // Background session: still track tool use but don't show processing state in browser
+  if (!isSelectedKey(key)) {
     session.lastToolUseTimestamp = new Date();
-    debugLog(`[Hook] post-tool: key=${key} active=false (approve, tracking tool use)`);
+    debugLog(`[Hook] post-tool: key=${key} selected=false (approve, tracking tool use)`);
     res.json({ decision: 'approve' });
     return;
   }
@@ -1274,18 +1246,18 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
 
   // Send current voice state so browser starts with correct UI.
   // Clients watching a different session get 'inactive'.
-  const initialState = (sessionKey === null || sessionKey === activeCompositeKey)
+  const initialState = (sessionKey === null || sessionKey === selectedSessionKey)
     ? serverAudioState.state
     : 'inactive';
   res.write(`data: ${JSON.stringify({
     type: 'voice-state',
     state: initialState,
-    sessionKey: activeCompositeKey
+    sessionKey: selectedSessionKey
   })}\n\n`);
 
   // Add client to map
   ttsClients.set(res, sessionKey);
-  debugLog(`[SSE] Client connected: session=${sessionKey || 'active'}`);
+  debugLog(`[SSE] Client connected: session=${sessionKey || 'selected'}`);
 
   // Remove client on disconnect
   res.on('close', () => {
@@ -1306,12 +1278,14 @@ app.get('/api/tts-events', (req: Request, res: Response) => {
   });
 });
 
-// Helper function to notify TTS clients viewing the active session
-function notifyTTSClients(text: string) {
-  const message = JSON.stringify({ type: 'speak', text, sessionKey: activeCompositeKey });
+// Helper function to notify TTS clients viewing a specific session.
+// Only sends to clients watching the given session (or all clients if viewingKey is null).
+function notifyTTSClients(text: string, sessionKey?: string) {
+  const targetKey = sessionKey || selectedSessionKey;
+  const message = JSON.stringify({ type: 'speak', text, sessionKey: targetKey });
   ttsClients.forEach((viewingKey, client) => {
-    // Send to clients watching the active session (null) or explicitly this session
-    if (viewingKey === null || viewingKey === activeCompositeKey) {
+    // Send to clients watching the target session (null means "watching selected")
+    if (viewingKey === null || viewingKey === targetKey) {
       client.write(`data: ${message}\n\n`);
     }
   });
@@ -1344,9 +1318,9 @@ function notifySessionReset() {
 
 // Helper function to notify clients viewing the active session about wait status
 function notifyWaitStatus(isWaiting: boolean) {
-  const message = JSON.stringify({ type: 'waitStatus', isWaiting, sessionKey: activeCompositeKey });
+  const message = JSON.stringify({ type: 'waitStatus', isWaiting, sessionKey: selectedSessionKey });
   ttsClients.forEach((viewingKey, client) => {
-    if (viewingKey === null || viewingKey === activeCompositeKey) {
+    if (viewingKey === null || viewingKey === selectedSessionKey) {
       client.write(`data: ${message}\n\n`);
     }
   });
@@ -1359,10 +1333,10 @@ function broadcastVoiceState(state: string): void {
   const message = JSON.stringify({
     type: 'voice-state',
     state,
-    sessionKey: activeCompositeKey
+    sessionKey: selectedSessionKey
   });
   ttsClients.forEach((viewingKey, client) => {
-    if (viewingKey === null || viewingKey === activeCompositeKey) {
+    if (viewingKey === null || viewingKey === selectedSessionKey) {
       client.write(`data: ${message}\n\n`);
     }
   });
@@ -1526,10 +1500,17 @@ function handleWsControlMessage(client: WsAudioClient, msg: { type: string; [key
       client.ws.send(JSON.stringify({ type: 'pong' }));
       break;
 
-    case 'select-session':
-      (client as any).selectedSessionKey = msg.sessionKey;
-      debugLog(`[WS] Client selected session: ${msg.sessionKey}`);
+    case 'select-session': {
+      const previousKey = selectedSessionKey;
+      const newKey = msg.sessionKey as string;
+      (client as any).selectedSessionKey = newKey;
+      // Browser selection is authoritative — update the server's selected session
+      if (newKey && sessions.has(newKey)) {
+        selectedSessionKey = newKey;
+      }
+      debugLog(`[WS] Browser selected session: ${previousKey} → ${newKey}`);
       break;
+    }
 
     default:
       debugLog(`[WS] Unknown message type: ${msg.type}`);
@@ -1749,7 +1730,7 @@ app.get('/api/sessions', (_req: Request, res: Response) => {
     sessionId: s.sessionId,
     agentId: s.agentId,
     agentType: s.agentType,
-    isActive: s.key === activeCompositeKey,
+    isActive: s.key === selectedSessionKey,
     lastActivity: s.lastActivity,
     utteranceCount: s.queue.utterances.length,
     messageCount: s.queue.messages.length,
@@ -1758,10 +1739,11 @@ app.get('/api/sessions', (_req: Request, res: Response) => {
 
   res.json({
     sessions: sessionList,
-    activeKey: activeCompositeKey,
+    activeKey: selectedSessionKey,
   });
 });
 
+// Browser can switch selected session via POST (backward compat — browser also uses WS select-session)
 app.post('/api/active-session', (req: Request, res: Response) => {
   const { key } = req.body;
 
@@ -1770,13 +1752,13 @@ app.post('/api/active-session', (req: Request, res: Response) => {
     return;
   }
 
-  const previousKey = activeCompositeKey;
-  activeCompositeKey = key;
-  debugLog(`[Session] Active changed: ${previousKey} → ${key}`);
+  const previousKey = selectedSessionKey;
+  selectedSessionKey = key;
+  debugLog(`[Session] Selected changed: ${previousKey} → ${key}`);
 
   res.json({
     success: true,
-    activeKey: activeCompositeKey,
+    activeKey: selectedSessionKey,
   });
 });
 
@@ -1800,14 +1782,14 @@ app.post('/api/speak', async (req: Request, res: Response) => {
   }
 
   // Check whitelist: only speak via TTS if text was approved by pre-speak hook
-  // Skip whitelist check if no multi-session is active (single session backward compat)
+  // Skip whitelist check if no session exists yet (single session backward compat)
   let whitelistSessionKey: string | undefined;
-  if (activeCompositeKey !== null) {
+  if (selectedSessionKey !== null) {
     const whitelistResult = checkWhitelist(text);
     if (!whitelistResult.matched) {
-      // Not whitelisted = inactive session. The pre-speak hook already stored the text
-      // in conversation history. Return success so the agent isn't confused.
-      debugLog(`[Speak] Non-whitelisted text (inactive session), returning success without TTS: "${text.slice(0, 30)}..."`);
+      // Not whitelisted — unexpected since pre-speak now always whitelists.
+      // Return success silently to avoid confusing the agent.
+      debugLog(`[Speak] Non-whitelisted text, returning success without TTS: "${text.slice(0, 30)}..."`);
       res.json({
         success: true,
         message: 'Text spoken successfully',
@@ -1818,23 +1800,31 @@ app.post('/api/speak', async (req: Request, res: Response) => {
     whitelistSessionKey = whitelistResult.sessionKey;
   }
 
+  // Only play TTS audio if the speaking session is the one the browser has selected.
+  // Background sessions get their text stored in conversation history but no audio.
+  const speakingSessionKey = whitelistSessionKey || selectedSessionKey;
+  const isBrowserSelected = !selectedSessionKey || speakingSessionKey === selectedSessionKey;
+
   try {
     // Use the session from the whitelist entry (the session that pre-speak approved),
-    // falling back to the active session for single-session backward compat
+    // falling back to the selected session for single-session backward compat
     const session = whitelistSessionKey
       ? (sessions.get(whitelistSessionKey) || getActiveSessionOrFirst())
       : getActiveSessionOrFirst();
 
-    // Always send text via SSE for conversation display + browser TTS
-    notifyTTSClients(text);
-    debugLog(`[Speak] Sent text to browser: "${text}"`);
+    if (isBrowserSelected) {
+      // Send text via SSE for conversation display + browser TTS
+      notifyTTSClients(text, speakingSessionKey || undefined);
+      debugLog(`[Speak] Sent text to browser: "${text}"`);
 
-    // Render TTS audio via macOS say command and stream over WebSocket
-    // This is async/non-blocking — the speak endpoint returns immediately
-    const sessionKey = whitelistSessionKey || activeCompositeKey;
-    enqueueTts(text, voicePreferences.speechRate, sessionKey).catch(err => {
-      debugLog(`[Speak] Failed to render system voice audio: ${err}`);
-    });
+      // Render TTS audio via macOS say command and stream over WebSocket
+      enqueueTts(text, voicePreferences.speechRate, speakingSessionKey).catch(err => {
+        debugLog(`[Speak] Failed to render system voice audio: ${err}`);
+      });
+    } else {
+      // Background session — store in conversation history but no TTS audio
+      debugLog(`[Speak] Background session ${speakingSessionKey} — storing without TTS: "${text.slice(0, 30)}..."`);
+    }
 
     // Store assistant's response in conversation history
     session.queue.addAssistantMessage(text);

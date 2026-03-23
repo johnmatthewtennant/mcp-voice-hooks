@@ -120,6 +120,13 @@ describe('Background Voice Enforcement', () => {
     });
 
     it('inactive session can stop after speaking when enforcement is on', async () => {
+      // Enable voice responses (required for /api/speak to work)
+      await fetch(`${server.url}/api/voice-active`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: true }),
+      });
+
       // Enable enforcement
       await fetch(`${server.url}/api/background-voice-enforcement`, {
         method: 'POST',
@@ -127,7 +134,7 @@ describe('Background Voice Enforcement', () => {
         body: JSON.stringify({ enabled: true }),
       });
 
-      // Register main as active
+      // Register main as selected
       await fetch(`${server.url}/api/hooks/post-tool`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -141,7 +148,7 @@ describe('Background Voice Enforcement', () => {
         body: JSON.stringify({ session_id: 'session1', agent_id: 'agent-1', agent_type: 'explore' }),
       });
 
-      // Sub-agent speaks (pre-speak stores in conversation history for inactive session)
+      // Sub-agent pre-speak whitelists, then speak stores and sets lastSpeakTimestamp
       await fetch(`${server.url}/api/hooks/pre-speak`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -150,6 +157,11 @@ describe('Background Voice Enforcement', () => {
           agent_id: 'agent-1',
           tool_input: { text: 'I found the answer.' },
         }),
+      });
+      await fetch(`${server.url}/api/speak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'I found the answer.' }),
       });
 
       // Sub-agent tries to stop - should be allowed now

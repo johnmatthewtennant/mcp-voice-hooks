@@ -150,8 +150,8 @@ class MessengerClient {
 
         // Session state
         this.sessions = [];
-        this.activeSessionKey = null;       // Server's active key (for hooks/TTS routing)
-        this.selectedSessionKey = null;     // User's UI selection (which tab they're viewing)
+        this.activeSessionKey = null;       // Server's selected key (for backward compat with API responses)
+        this.selectedSessionKey = null;     // User's UI selection — authoritative for all routing
         this.unreadCounts = {}; // key → count of messages since last viewed
 
         // Initialize
@@ -993,6 +993,10 @@ class MessengerClient {
             console.log('[WS] Connected');
             this.wsConnected = true;
             this.wsReconnectDelay = 1000; // Reset backoff on successful connect
+            // Sync browser's selected session to server on WS connect/reconnect
+            if (this.selectedSessionKey) {
+                this.audioWs.send(JSON.stringify({ type: 'select-session', sessionKey: this.selectedSessionKey }));
+            }
             // Start audio capture now that the WS connection is ready
             this.startAudioCapture();
         };

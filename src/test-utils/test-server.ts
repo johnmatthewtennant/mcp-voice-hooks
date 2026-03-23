@@ -197,7 +197,7 @@ export class TestServer {
 
   // Multi-session state
   public sessions = new Map<string, SessionState>();
-  public activeCompositeKey: string | null = null;
+  public selectedSessionKey: string | null = null;
   public speakWhitelist = new Map<string, { count: number; expiry: number; sessionKey: string }>();
   private whitelistTTL = 5000;
   public backgroundVoiceEnforcement = false;
@@ -248,8 +248,8 @@ export class TestServer {
   }
 
   private getActiveSession(): SessionState | null {
-    if (this.activeCompositeKey) {
-      const session = this.sessions.get(this.activeCompositeKey);
+    if (this.selectedSessionKey) {
+      const session = this.sessions.get(this.selectedSessionKey);
       if (session) return session;
     }
     // No active session set — only return default if no real sessions exist
@@ -270,13 +270,13 @@ export class TestServer {
     return this.getOrCreateSession(defaultKey);
   }
 
-  private isActiveKey(key: string): boolean {
-    return this.activeCompositeKey !== null && key === this.activeCompositeKey;
+  private isSelectedKey(key: string): boolean {
+    return this.selectedSessionKey !== null && key === this.selectedSessionKey;
   }
 
-  private registerIfFirst(key: string): void {
-    if (this.activeCompositeKey === null) {
-      this.activeCompositeKey = key;
+  private autoSelectIfNone(key: string): void {
+    if (this.selectedSessionKey === null) {
+      this.selectedSessionKey = key;
 
       // Migrate data from default session to first real session
       const parsed = JSON.parse(key) as [string, string];
@@ -297,30 +297,27 @@ export class TestServer {
         }
       }
     } else {
-      const currentActive = this.sessions.get(this.activeCompositeKey);
+      const currentSelected = this.sessions.get(this.selectedSessionKey);
       const parsed = JSON.parse(key) as [string, string];
       const newSessionId = parsed[0];
 
-      if (currentActive && currentActive.sessionId === 'default' && newSessionId !== 'default') {
-        // If the current active is a default session and this is a real session, upgrade
+      if (currentSelected && currentSelected.sessionId === 'default' && newSessionId !== 'default') {
+        // If the current selection is a default session and this is a real session, upgrade
         // Migrate data from default session
         const newSession = this.getOrCreateSession(key, newSessionId);
-        if (currentActive.queue.utterances.length > 0 || currentActive.queue.messages.length > 0) {
-          for (const utterance of currentActive.queue.utterances) {
+        if (currentSelected.queue.utterances.length > 0 || currentSelected.queue.messages.length > 0) {
+          for (const utterance of currentSelected.queue.utterances) {
             newSession.queue.utterances.push(utterance);
           }
-          for (const message of currentActive.queue.messages) {
+          for (const message of currentSelected.queue.messages) {
             newSession.queue.messages.push(message);
           }
-          currentActive.queue.utterances = [];
-          currentActive.queue.messages = [];
+          currentSelected.queue.utterances = [];
+          currentSelected.queue.messages = [];
         }
-        this.activeCompositeKey = key;
-      } else if (currentActive && currentActive.sessionId !== newSessionId && newSessionId !== 'default') {
-        // Different session_id means new Claude instance — always switch active
-        this.activeCompositeKey = key;
-        this.voicePreferences.voiceActive = false;
+        this.selectedSessionKey = key;
       }
+      // Other sessions don't auto-select — browser selection is authoritative
     }
   }
 
@@ -521,13 +518,12 @@ export class TestServer {
         return;
       }
 
-      // Check whitelist if multi-session is active
+      // Check whitelist if any session exists
       let whitelistSessionKey: string | undefined;
-      if (this.activeCompositeKey !== null) {
+      if (this.selectedSessionKey !== null) {
         const whitelistResult = this.checkWhitelist(text);
         if (!whitelistResult.matched) {
-          // Not whitelisted = inactive session. Pre-speak already stored text.
-          // Return success so the agent isn't confused.
+          // Not whitelisted — unexpected since pre-speak now always whitelists.
           res.json({
             success: true,
             message: 'Text spoken successfully',
@@ -538,16 +534,22 @@ export class TestServer {
         whitelistSessionKey = whitelistResult.sessionKey;
       }
 
+      // Only play TTS audio if the speaking session is the browser-selected one
+      const speakingSessionKey = whitelistSessionKey || this.selectedSessionKey;
+      const isBrowserSelected = !this.selectedSessionKey || speakingSessionKey === this.selectedSessionKey;
+
       try {
         // Use the session from the whitelist entry for correct routing
         const session = whitelistSessionKey
           ? (this.sessions.get(whitelistSessionKey) || this.getActiveSessionOrFirst())
           : this.getActiveSessionOrFirst();
 
-        // Use macOS say command for TTS (mocked in tests)
-        await execAsync(`say "${text.replace(/"/g, '\\"')}"`);
+        if (isBrowserSelected) {
+          // Use macOS say command for TTS (mocked in tests)
+          await execAsync(`say "${text.replace(/"/g, '\\"')}"`);
+        }
 
-        // Store assistant's response in conversation history
+        // Store assistant's response in conversation history (always, regardless of selection)
         session.queue.addAssistantMessage(text);
 
         // Mark all delivered utterances as responded
@@ -714,7 +716,7 @@ export class TestServer {
         sessionId: s.sessionId,
         agentId: s.agentId,
         agentType: s.agentType,
-        isActive: s.key === this.activeCompositeKey,
+        isActive: s.key === this.selectedSessionKey,
         lastActivity: s.lastActivity,
         utteranceCount: s.queue.utterances.length,
         messageCount: s.queue.messages.length,
@@ -723,7 +725,7 @@ export class TestServer {
 
       res.json({
         sessions: sessionList,
-        activeKey: this.activeCompositeKey,
+        activeKey: this.selectedSessionKey,
       });
     });
 
@@ -736,10 +738,10 @@ export class TestServer {
         return;
       }
 
-      this.activeCompositeKey = key;
+      this.selectedSessionKey = key;
       res.json({
         success: true,
-        activeKey: this.activeCompositeKey,
+        activeKey: this.selectedSessionKey,
       });
     });
 
@@ -759,11 +761,11 @@ export class TestServer {
     // Hook endpoints for testing
     this.app.post('/api/hooks/stop', (req, res) => {
       const { key, sessionId, agentId, agentType } = this.parseCompositeKey(req.body);
-      this.registerIfFirst(key);
+      this.autoSelectIfNone(key);
       const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
 
       // Inactive session: enforce "must speak after tool use" when enforcement is on OR voice responses enabled
-      if (!this.isActiveKey(key)) {
+      if (!this.isSelectedKey(key)) {
         const enforceSpeak = this.backgroundVoiceEnforcement;
         if (enforceSpeak && session.lastToolUseTimestamp &&
           (!session.lastSpeakTimestamp || session.lastSpeakTimestamp < session.lastToolUseTimestamp)) {
@@ -802,51 +804,41 @@ export class TestServer {
       res.json({ decision: 'approve' });
     });
 
-    // Pre-speak hook
+    // Pre-speak hook — all sessions get whitelisted for TTS
+    // The /api/speak endpoint decides whether to actually play audio
+    // based on which session the browser has selected.
     this.app.post('/api/hooks/pre-speak', (req, res) => {
       const { key, sessionId, agentId, agentType } = this.parseCompositeKey(req.body);
-      this.registerIfFirst(key);
+      this.autoSelectIfNone(key);
       const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
       const speakText = req.body?.tool_input?.text;
 
-      // Active session: check for pending utterances, whitelist text
-      if (this.isActiveKey(key)) {
-        const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
-        if (pendingUtterances.length > 0) {
-          res.json({
-            decision: 'block',
-            reason: `There are ${pendingUtterances.length} pending utterances. Please dequeue them before speaking.`
-          });
-          return;
-        }
-
-        // Whitelist the text for the speak endpoint with session key
-        if (speakText) {
-          this.addToWhitelist(speakText, key);
-        }
-
-        res.json({ decision: 'approve' });
+      // Check for pending utterances (applies to all sessions)
+      const pendingUtterances = session.queue.utterances.filter(u => u.status === 'pending');
+      if (pendingUtterances.length > 0) {
+        res.json({
+          decision: 'block',
+          reason: `There are ${pendingUtterances.length} pending utterances. Please dequeue them before speaking.`
+        });
         return;
       }
 
-      // Inactive session: store in that session's conversation history, approve without TTS
+      // Always whitelist the text (regardless of selected session)
       if (speakText) {
-        session.queue.addAssistantMessage(speakText);
-        session.lastSpeakTimestamp = new Date();
+        this.addToWhitelist(speakText, key);
       }
-      res.json({
-        decision: 'approve',
-      });
+
+      res.json({ decision: 'approve' });
     });
 
     // Post-tool hook
     this.app.post('/api/hooks/post-tool', (req, res) => {
       const { key, sessionId, agentId, agentType } = this.parseCompositeKey(req.body);
-      this.registerIfFirst(key);
+      this.autoSelectIfNone(key);
       const session = this.getOrCreateSession(key, sessionId, agentId, agentType);
 
       // Inactive session: still track tool use but don't route voice
-      if (!this.isActiveKey(key)) {
+      if (!this.isSelectedKey(key)) {
         session.lastToolUseTimestamp = new Date();
         res.json({ decision: 'approve' });
         return;
@@ -937,7 +929,7 @@ export class TestServer {
       speechRate: 200,
       feedbackSoundMode: 'continuous'
     };
-    this.activeCompositeKey = null;
+    this.selectedSessionKey = null;
     this.speakWhitelist.clear();
     this.backgroundVoiceEnforcement = false;
     clearTtsQueue();
