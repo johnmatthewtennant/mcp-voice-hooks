@@ -45,6 +45,12 @@
             box-shadow: 8px 8px 0 #666;
         }
 
+        .header-title-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
         .app-header h1 {
             margin: 0;
             font-family: 'Courier New', 'Courier', monospace;
@@ -836,8 +842,8 @@
     <div class="app-container">
         <!-- Header -->
         <div class="app-header">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <button id="sidebarOpenBtn" class="sidebar-open-btn" title="Show sessions">Sessions</button>
+            <div class="header-title-row">
+                <button id="sidebarOpenBtn" class="sidebar-open-btn" type="button" title="Show sessions">Sessions</button>
                 <h1>Voice Mode for Claude Code</h1>
             </div>
             <div class="header-settings">
