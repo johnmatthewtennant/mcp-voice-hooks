@@ -45,6 +45,12 @@
             box-shadow: 8px 8px 0 #666;
         }
 
+        .header-title-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
         .app-header h1 {
             margin: 0;
             font-family: 'Courier New', 'Courier', monospace;
@@ -679,12 +685,8 @@
             background: rgba(255, 255, 255, 0.3);
         }
 
-        /* Floating sidebar toggle button (top-left, when sidebar is collapsed) */
+        /* Sidebar toggle button (in header, when sidebar is collapsed) */
         .sidebar-open-btn {
-            position: fixed;
-            top: 12px;
-            left: 12px;
-            z-index: 101;
             background: white;
             border: 1px solid #999;
             border-radius: 4px;
@@ -693,7 +695,7 @@
             color: #666;
             font-family: 'Courier New', 'Courier', monospace;
             font-size: 11px;
-            display: none;
+            display: inline-block;
             box-shadow: 0 1px 4px rgba(0,0,0,0.15);
         }
 
@@ -702,8 +704,8 @@
             color: #333;
         }
 
-        .sidebar-open-btn.visible {
-            display: inline-block;
+        .sidebar-open-btn.hidden {
+            display: none;
         }
 
         /* Mobile Responsive Styles */
@@ -837,11 +839,13 @@
     </style>
 </head>
 <body>
-    <button id="sidebarOpenBtn" class="sidebar-open-btn" title="Show sessions">Sessions</button>
     <div class="app-container">
         <!-- Header -->
         <div class="app-header">
-            <h1>Voice Mode for Claude Code</h1>
+            <div class="header-title-row">
+                <button id="sidebarOpenBtn" class="sidebar-open-btn" type="button" title="Show sessions">Sessions</button>
+                <h1>Voice Mode for Claude Code</h1>
+            </div>
             <div class="header-settings">
                 <div class="toggle-header" id="settingsToggleHeader">
                     <span class="toggle-arrow">&#9881;</span>

@@ -297,10 +297,10 @@ class MessengerClient {
         if (this.sessionSidebar) {
             if (open) {
                 this.sessionSidebar.classList.remove('collapsed');
-                if (this.sidebarOpenBtn) this.sidebarOpenBtn.classList.remove('visible');
+                if (this.sidebarOpenBtn) this.sidebarOpenBtn.classList.add('hidden');
             } else {
                 this.sessionSidebar.classList.add('collapsed');
-                if (this.sidebarOpenBtn) this.sidebarOpenBtn.classList.add('visible');
+                if (this.sidebarOpenBtn) this.sidebarOpenBtn.classList.remove('hidden');
             }
         }
     }
@@ -317,11 +317,7 @@ class MessengerClient {
                 this.selectedSessionKey = data.activeKey;
             }
 
-            // Show sidebar button when there are multiple sessions
-            const hasMultipleSessions = this.sessions.length > 1;
-            if (hasMultipleSessions && this.sessionSidebar.classList.contains('collapsed')) {
-                if (this.sidebarOpenBtn) this.sidebarOpenBtn.classList.add('visible');
-            }
+            // Button is always visible via CSS; hidden class is only added when sidebar is open
 
             // Track unread counts for inactive sessions
             for (const session of this.sessions) {
