@@ -144,11 +144,12 @@ describe('POST /api/hooks/post-tool', () => {
       expect(data.reason).toContain('Wait');
       expect(data.reason).toContain('I changed my mind');
 
-      // Verify ordering: both utterances present in the reason text
+      // Verify ordering: first utterance appears before second in the response
       const waitIdx = data.reason.indexOf('Wait');
       const changedIdx = data.reason.indexOf('I changed my mind');
       expect(waitIdx).toBeGreaterThanOrEqual(0);
       expect(changedIdx).toBeGreaterThanOrEqual(0);
+      expect(waitIdx).toBeLessThan(changedIdx);
     });
 
     it('should mark delivered utterances as delivered (not pending)', async () => {
@@ -269,37 +270,12 @@ describe('POST /api/hooks/post-tool', () => {
   // to avoid duplication. The inactive-session path is the one that explicitly sets
   // lastToolUseTimestamp in the TestServer (matching production behavior).
 
-  describe('interaction with stop hook (must speak after tool use)', () => {
-    it('should block stop when tool was used but not spoken (voice active)', async () => {
-      await fetch(`${server.url}/api/voice-active`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: true })
-      });
-
-      // Register session and trigger tool use tracking
-      await fetch(`${server.url}/api/hooks/post-tool`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: 'test-session' })
-      });
-
-      // Try to stop without speaking - should be blocked
-      const stopRes = await fetch(`${server.url}/api/hooks/stop`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: 'test-session' })
-      });
-
-      const stopData = await stopRes.json() as any;
-      // TestServer stop hook doesn't check lastToolUseTimestamp vs lastSpeakTimestamp,
-      // but it does block when voice is active (requires wait_for_utterance check).
-      // The important thing is the stop hook doesn't just approve freely.
-      expect(stopData.decision).toBe('approve');
-      // Note: TestServer stop hook approves here because there are no pending/delivered
-      // utterances. In production, handleHookRequest would block due to
-      // lastToolUseTimestamp > lastSpeakTimestamp. This behavioral gap is documented.
-    });
+  describe('interaction with stop hook', () => {
+    // Note: TestServer stop hook does NOT implement the production "must speak after tool use"
+    // rule (lastToolUseTimestamp vs lastSpeakTimestamp). It only checks for pending/delivered
+    // utterances. The production handleHookRequest blocks stop when voice is active and
+    // lastToolUseTimestamp > lastSpeakTimestamp. Testing that rule requires the production
+    // server or updating TestServer to match.
 
     it('should allow stop after speaking following tool use', async () => {
       await fetch(`${server.url}/api/voice-active`, {
