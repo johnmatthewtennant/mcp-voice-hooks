@@ -161,11 +161,29 @@ This environment variable is used by both:
 
 **Note**: Setting this in `.claude/settings.local.json` is the recommended approach. The environment variable will be available to both the MCP server process and the hook commands.
 
+#### Network exposure
+
+The server listens on `127.0.0.1` only. This matters more than a normal localhost service: `POST /api/potential-utterances` delivers text to Claude as if you had spoken it, in a session that can edit files and run commands, and `GET /api/conversation` returns the transcript. There is no authentication, so reachability is the whole boundary.
+
+Cross-origin browser requests are also refused outright — not just hidden by CORS — so a page on another site cannot post utterances into your session from a tab you happen to have open.
+
 #### HTTPS (for access from other devices)
 
 Browsers block microphone access on insecure origins. HTTPS is enabled automatically — the server generates a self-signed certificate on first startup and serves HTTPS on port 5112 (HTTP port + 1).
 
-To access from another device, open `https://<your-hostname>.local:5112` and accept the self-signed certificate warning in the browser.
+Because the server binds loopback by default, using another device is opt-in:
+
+```json
+{
+  "env": {
+    "MCP_VOICE_HOOKS_BIND": "0.0.0.0"
+  }
+}
+```
+
+Then open `https://<your-hostname>.local:5112` on the other device and accept the self-signed certificate warning. Your hostname's HTTPS origin is allowed automatically; add any others with `MCP_VOICE_HOOKS_EXTRA_ORIGINS` (comma-separated).
+
+**Only do this on a network you trust.** While it is set, anything that can reach the port — every other device on that Wi-Fi, and any VPN or tailnet interface the machine is on — can drive your Claude session and read the conversation. The server prints a warning at startup when it is not bound to loopback.
 
 To customize the HTTPS port:
 

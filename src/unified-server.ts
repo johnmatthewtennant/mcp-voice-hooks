@@ -15,6 +15,7 @@ import os from 'os';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
+import { buildAllowedOrigins, originGuard, corsOriginCheck } from './origin-guard.js';
 import { SpeechRecognizer } from './speech-recognition.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -29,6 +30,22 @@ const __dirname = path.dirname(__filename);
 const WAIT_TIMEOUT_SECONDS = 300; // 5-minute safety net; primary exit is browser disconnect
 const HTTP_PORT = process.env.MCP_VOICE_HOOKS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_PORT) : 5111;
 const HTTPS_PORT = process.env.MCP_VOICE_HOOKS_HTTPS_PORT ? parseInt(process.env.MCP_VOICE_HOOKS_HTTPS_PORT) : HTTP_PORT + 1;
+
+// Interface to bind to. Loopback by default: these endpoints take text that is
+// delivered to Claude as user input, so anything that can reach them can drive a
+// session holding full tool access. Binding 0.0.0.0 exposes that to the whole LAN
+// (and to any VPN/tailnet interface). Opt in explicitly for cross-device use.
+const BIND_HOST = process.env.MCP_VOICE_HOOKS_BIND || '127.0.0.1';
+const BIND_IS_LOOPBACK = BIND_HOST === '127.0.0.1' || BIND_HOST === 'localhost' || BIND_HOST === '::1';
+
+// Origins the browser UI is legitimately served from. Everything else is rejected,
+// so a page on an unrelated site cannot POST utterances into the session.
+const ALLOWED_ORIGINS = buildAllowedOrigins({
+  httpPort: HTTP_PORT,
+  httpsPort: HTTPS_PORT,
+  bindIsLoopback: BIND_IS_LOOPBACK,
+  extraOrigins: process.env.MCP_VOICE_HOOKS_EXTRA_ORIGINS,
+});
 
 // Server-wide event emitter for cross-component signals
 const serverEvents = new EventEmitter();
@@ -649,7 +666,11 @@ setInterval(cleanupWhitelist, WHITELIST_TTL_MS);
 
 // HTTP Server Setup (always created)
 const app = express();
-app.use(cors());
+
+// Refuse cross-origin browser traffic before it reaches any route. See origin-guard.ts
+// for why the cors() middleware alone does not close this.
+app.use(originGuard(ALLOWED_ORIGINS));
+app.use(cors({ origin: corsOriginCheck(ALLOWED_ORIGINS) }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -1928,8 +1949,13 @@ httpServer.on('error', (err: NodeJS.ErrnoException) => {
   }
 });
 
-httpServer.listen(HTTP_PORT, async () => {
+httpServer.listen(HTTP_PORT, BIND_HOST, async () => {
   if (eaddrinuseDetected) return; // defensive guard
+
+  if (!BIND_IS_LOOPBACK) {
+    const log = IS_MCP_MANAGED ? console.error : console.log;
+    log(`[Security] WARNING: bound to ${BIND_HOST}, not loopback — these endpoints deliver input to Claude and are now reachable from other machines on this network.`);
+  }
 
   // Pre-render sound effects (chime, pulses) for server-side audio
   try {
@@ -2031,7 +2057,7 @@ function startHttpsServer() {
       }
     });
 
-    httpsServer.listen(HTTPS_PORT, () => {
+    httpsServer.listen(HTTPS_PORT, BIND_HOST, () => {
       const log = IS_MCP_MANAGED ? console.error : console.log;
       log(`[HTTPS] Server listening on https://localhost:${HTTPS_PORT}`);
     });
