@@ -15,7 +15,7 @@ import os from 'os';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { debugLog } from './debug.js';
-import { buildAllowedOrigins, originGuard, corsOriginCheck } from './origin-guard.js';
+import { buildAllowedOrigins, originGuard, corsOriginCheck, isWebSocketOriginAllowed } from './origin-guard.js';
 import { SpeechRecognizer } from './speech-recognition.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -1690,6 +1690,15 @@ async function _streamTtsOverWsInner(client: WsAudioClient, filePath: string, au
 // Attach WebSocket upgrade handler to an HTTP(S) server
 function attachWsUpgrade(server: http.Server | https.Server) {
   server.on('upgrade', (request, socket, head) => {
+    // WebSockets bypass both CORS and the Express origin guard, so the check is repeated
+    // here. See isWebSocketOriginAllowed for why this socket is not safe to leave open.
+    if (!isWebSocketOriginAllowed(request.headers.origin, ALLOWED_ORIGINS)) {
+      debugLog(`[Security] Rejected WebSocket upgrade from ${request.headers.origin}`);
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     const url = new URL(request.url!, `http://${request.headers.host}`);
     if (url.pathname === '/ws/audio') {
       wss.handleUpgrade(request, socket, head, (ws) => {

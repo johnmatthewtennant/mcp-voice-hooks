@@ -75,6 +75,27 @@ export function originGuard(allowedOrigins: Set<string>) {
   };
 }
 
+/**
+ * Whether a WebSocket upgrade should be accepted.
+ *
+ * WebSockets are exempt from CORS by design, and the upgrade never passes through Express
+ * middleware, so the HTTP guard above does not cover them. That matters here because the
+ * socket is not read-only: connecting evicts the existing audio client (the server keeps
+ * one at a time), `select-session` chooses which Claude session receives input, and binary
+ * frames are fed to the speech recognizer, whose transcript becomes an utterance delivered
+ * to Claude. A page in the user's browser could therefore hijack the voice session, or
+ * synthesise audio and have it transcribed into instructions.
+ *
+ * Same policy as the HTTP guard: a present-but-unlisted Origin is refused, and an absent
+ * Origin is allowed for non-browser clients.
+ */
+export function isWebSocketOriginAllowed(
+  origin: string | undefined,
+  allowedOrigins: Set<string>,
+): boolean {
+  return origin === undefined || allowedOrigins.has(origin);
+}
+
 /** cors() origin callback sharing the same allowlist. */
 export function corsOriginCheck(allowedOrigins: Set<string>) {
   return (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void): void => {
