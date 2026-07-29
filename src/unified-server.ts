@@ -8,7 +8,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
-import { execFile, type ChildProcess } from 'child_process';
+import { execFile, execFileSync, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
@@ -2016,13 +2016,23 @@ function startHttpsServer() {
     const log = IS_MCP_MANAGED ? console.error : console.log;
     try {
       fs.mkdirSync(certsDir, { recursive: true });
-      const hostname = require('os').hostname();
-      const { execSync } = require('child_process');
-      execSync(
-        `openssl req -x509 -newkey rsa:2048 -nodes ` +
-        `-keyout "${keyPath}" -out "${certPath}" ` +
-        `-days 365 -subj "/CN=${hostname}" ` +
-        `-addext "subjectAltName=DNS:${hostname},DNS:${hostname}.local,DNS:localhost,IP:127.0.0.1"`,
+      // `os` and `execFileSync` are imported at module scope on purpose: this file is
+      // bundled as ESM, where a runtime require() throws "Dynamic require of \"os\" is not
+      // supported" — which was swallowed by the catch below, so certificate generation
+      // always failed and HTTPS silently never started.
+      const hostname = os.hostname();
+      // execFileSync with an argv array rather than a shell string: the macOS computer name
+      // is user-settable and can contain shell metacharacters.
+      execFileSync(
+        'openssl',
+        [
+          'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+          '-keyout', keyPath,
+          '-out', certPath,
+          '-days', '365',
+          '-subj', `/CN=${hostname}`,
+          '-addext', `subjectAltName=DNS:${hostname},DNS:${hostname}.local,DNS:localhost,IP:127.0.0.1`,
+        ],
         { stdio: 'pipe' }
       );
       log(`[HTTPS] Auto-generated self-signed certificate (CN=${hostname})`);
