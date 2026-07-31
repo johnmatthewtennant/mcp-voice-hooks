@@ -2025,10 +2025,8 @@ function startHttpsServer() {
     const log = IS_MCP_MANAGED ? console.error : console.log;
     try {
       fs.mkdirSync(certsDir, { recursive: true });
-      // `os` and `execFileSync` are imported at module scope on purpose: this file is
-      // bundled as ESM, where a runtime require() throws "Dynamic require of \"os\" is not
-      // supported" — which was swallowed by the catch below, so certificate generation
-      // always failed and HTTPS silently never started.
+      // Certificate generation runs from bundled ESM, so its dependencies must remain
+      // module-scope imports.
       const hostname = os.hostname();
       // execFileSync with an argv array rather than a shell string: the macOS computer name
       // is user-settable and can contain shell metacharacters.
