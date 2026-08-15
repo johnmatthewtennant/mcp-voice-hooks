@@ -116,6 +116,16 @@ Other downloaded voices will show up in the voice dropdown in the voice-hooks br
 
 There is a bug in Safari that prevents browser text-to-speech from loading high-quality voices after browser restart. This is a Safari Web Speech API limitation. To use high-quality voices in Safari you need to set your system voice to Siri and select "Mac System Voice" in the voice-hooks browser interface.
 
+## Typing instead of speaking
+
+The browser interface works without the microphone. Type in the message box and press Enter, and Claude's reply appears as a chat bubble instead of being spoken.
+
+One behaviour is worth understanding, because it looks odd in the terminal. Hooks only run while Claude is working, so a session sitting idle at the CLI prompt cannot be reached — anything you type would queue up unanswered. To keep the conversation going, the stop hook holds Claude's turn open while a browser tab is attached, waiting for your next message. The CLI therefore shows Claude as busy between messages, and it stays that way until:
+
+- you send another message (Claude picks it up and continues), or
+- you close the browser tab (the turn ends immediately), or
+- five minutes pass with no input (the turn ends; after that, send a message in the CLI to start a new one)
+
 ## Known Limitations
 
 - **Background agents don't notify in voice mode.** When Claude launches background agents (via the Agent tool), their completion notifications appear in the conversation text but don't trigger hooks. This means you won't hear a voice notification when a background task finishes. **Workaround:** Manually check background agent status, or avoid using background agents during voice sessions. *(Verified with Claude Code 2.1.69, March 2026)*

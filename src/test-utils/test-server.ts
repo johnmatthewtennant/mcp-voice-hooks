@@ -201,6 +201,9 @@ export class TestServer {
   public speakWhitelist = new Map<string, { count: number; expiry: number; sessionKey: string }>();
   private whitelistTTL = 5000;
   public backgroundVoiceEnforcement = false;
+  // Stands in for connected SSE/WebSocket browser clients, which the real
+  // server counts to decide whether the chat UI is attached.
+  public chatClientCount = 0;
 
   constructor() {
     this.app = express();
@@ -245,6 +248,15 @@ export class TestServer {
     }
     session.lastActivity = new Date();
     return session;
+  }
+
+  // True when a browser is attached — the text-mode counterpart to voiceActive.
+  private isChatActive(): boolean {
+    return this.chatClientCount > 0;
+  }
+
+  private repliesExpected(): boolean {
+    return this.voicePreferences.voiceActive || this.isChatActive();
   }
 
   private getActiveSession(): SessionState | null {
@@ -431,10 +443,10 @@ export class TestServer {
 
     // POST /api/wait-for-utterances (simplified for testing - doesn't actually wait)
     this.app.post('/api/wait-for-utterances', (_req, res) => {
-      if (!this.voicePreferences.voiceActive) {
+      if (!this.repliesExpected()) {
         res.status(400).json({
           success: false,
-          error: 'Voice input is not active. Cannot wait for utterances when voice input is disabled.'
+          error: 'Voice input is not active and no browser is connected. Cannot wait for utterances.'
         });
         return;
       }
@@ -510,13 +522,8 @@ export class TestServer {
         return;
       }
 
-      if (!this.voicePreferences.voiceActive) {
-        res.status(400).json({
-          error: 'Voice responses are disabled',
-          message: 'Cannot speak when voice responses are disabled'
-        });
-        return;
-      }
+      // Mirrors unified-server: voiceActive gates audio only, not the whole endpoint.
+      const audioEnabled = this.voicePreferences.voiceActive;
 
       // Check whitelist if any session exists
       let whitelistSessionKey: string | undefined;
@@ -544,7 +551,7 @@ export class TestServer {
           ? (this.sessions.get(whitelistSessionKey) || this.getActiveSessionOrFirst())
           : this.getActiveSessionOrFirst();
 
-        if (isBrowserSelected) {
+        if (isBrowserSelected && audioEnabled) {
           // Use macOS say command for TTS (mocked in tests)
           await execAsync(`say "${text.replace(/"/g, '\\"')}"`);
         }
@@ -562,7 +569,10 @@ export class TestServer {
 
         res.json({
           success: true,
-          message: 'Text spoken successfully',
+          message: audioEnabled
+            ? 'Text spoken successfully'
+            : 'Text recorded in the conversation; audio skipped because voice input is not active',
+          spoken: audioEnabled,
           respondedCount: deliveredUtterances.length
         });
       } catch (error) {
@@ -789,8 +799,9 @@ export class TestServer {
         return;
       }
 
-      // Check for unresponded utterances (when voice responses enabled)
-      if (this.voicePreferences.voiceActive) {
+      // Check for unresponded utterances (when a reply will reach the user —
+      // microphone on, or a browser attached to the chat UI)
+      if (this.repliesExpected()) {
         const deliveredUtterances = session.queue.utterances.filter(u => u.status === 'delivered');
         if (deliveredUtterances.length > 0) {
           res.json({

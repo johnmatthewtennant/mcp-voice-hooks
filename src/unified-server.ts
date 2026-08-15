@@ -771,15 +771,28 @@ app.post('/api/dequeue-utterances', (_req: Request, res: Response) => {
   res.json(result);
 });
 
+// Whether a browser tab is attached and able to show a reply. voiceActive only
+// tracks the microphone, so it says nothing about someone reading the chat.
+function isChatActive(): boolean {
+  return ttsClients.size > 0 || wsAudioClients.size > 0;
+}
+
+// Whether Claude is expected to produce a reply the user will actually see,
+// either spoken aloud or rendered as a chat bubble.
+function repliesExpected(): boolean {
+  return voicePreferences.voiceActive || isChatActive();
+}
+
 // Shared wait for utterance logic
 async function waitForUtteranceCore(session?: SessionState) {
   const s = session || getActiveSessionOrFirst();
 
-  // Check if voice input is active
-  if (!voicePreferences.voiceActive) {
+  // Waiting requires somewhere for input to come from: a live microphone, or a
+  // browser tab the user can type into.
+  if (!repliesExpected()) {
     return {
       success: false,
-      error: 'Voice input is not active. Cannot wait for utterances when voice input is disabled.'
+      error: 'Voice input is not active and no browser is connected. Cannot wait for utterances.'
     };
   }
 
@@ -794,14 +807,16 @@ async function waitForUtteranceCore(session?: SessionState) {
 
   // Poll for utterances
   while (Date.now() - startTime < maxWaitMs) {
-    // Check if voice input is still active
-    if (!voicePreferences.voiceActive) {
-      debugLog('[WaitCore] Voice input deactivated during wait_for_utterance');
+    // Stop waiting if both input routes go away — mic switched off and the
+    // last browser tab closed. Otherwise the turn would stay open with nobody
+    // able to reach it.
+    if (!repliesExpected()) {
+      debugLog('[WaitCore] No input route remaining during wait_for_utterance');
       notifyWaitStatus(false); // Notify wait has ended
       return {
         success: true,
         utterances: [],
-        message: 'Voice input was deactivated',
+        message: 'Voice input was deactivated and no browser is connected',
         waitTime: Date.now() - startTime,
       };
     }
@@ -944,7 +959,10 @@ app.post('/api/validate-action', (req: Request, res: Response) => {
 // Unified hook handler
 function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-tool', session?: SessionState): { decision: 'approve' | 'block', reason?: string } | Promise<{ decision: 'approve' | 'block', reason?: string }> {
   const s = session || getActiveSessionOrFirst();
-  const voiceActive = voicePreferences.voiceActive;
+  // A reply is owed whenever the user can see or hear one — mic on, or a chat
+  // tab open. Text-only sessions get the same conversational guarantees as
+  // voice ones; only the delivery differs.
+  const replyExpected = repliesExpected();
 
   // 1. Check for pending utterances and auto-dequeue
   // Always check for pending utterances regardless of voiceActive
@@ -965,8 +983,8 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
     }
   }
 
-  // 2. Check for delivered utterances (when voice enabled)
-  if (voiceActive) {
+  // 2. Check for delivered utterances (when a reply will reach the user)
+  if (replyExpected) {
     const deliveredUtterances = s.queue.utterances.filter(u => u.status === 'delivered');
     if (deliveredUtterances.length > 0) {
       // Only allow speak to proceed
@@ -994,7 +1012,7 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
   // 5. Handle stop
   if (attemptedAction === 'stop') {
     // Check if must speak after tool use
-    if (voiceActive && s.lastToolUseTimestamp &&
+    if (replyExpected && s.lastToolUseTimestamp &&
       (!s.lastSpeakTimestamp || s.lastSpeakTimestamp < s.lastToolUseTimestamp)) {
       return {
         decision: 'block',
@@ -1002,8 +1020,8 @@ function handleHookRequest(attemptedAction: 'tool' | 'speak' | 'stop' | 'post-to
       };
     }
 
-    // Auto-wait for utterances (only if voice is active)
-    if (voiceActive) {
+    // Auto-wait for utterances (whenever a reply route exists — mic or chat tab)
+    if (replyExpected) {
       return (async () => {
         try {
           debugLog(`[Stop Hook] Auto-calling wait_for_utterance...`);
@@ -1801,14 +1819,12 @@ app.post('/api/speak', async (req: Request, res: Response) => {
     return;
   }
 
-  // Check if voice responses are enabled
-  if (!voicePreferences.voiceActive) {
-    debugLog(`[Speak] Voice responses disabled, returning error`);
-    res.status(400).json({
-      error: 'Voice responses are disabled',
-      message: 'Cannot speak when voice responses are disabled'
-    });
-    return;
+  // voiceActive reflects whether the browser is listening, which is what gates *audio*.
+  // It is deliberately not a gate on the whole endpoint: the assistant's text is still
+  // recorded and pushed to the UI so the conversation stays complete when audio is off.
+  const audioEnabled = voicePreferences.voiceActive;
+  if (!audioEnabled) {
+    debugLog(`[Speak] Voice input is not active — recording text without audio`);
   }
 
   // Check whitelist: only speak via TTS if text was approved by pre-speak hook
@@ -1847,10 +1863,14 @@ app.post('/api/speak', async (req: Request, res: Response) => {
       notifyTTSClients(text, speakingSessionKey || undefined);
       debugLog(`[Speak] Sent text to browser: "${text}"`);
 
-      // Render TTS audio via macOS say command and stream over WebSocket
-      enqueueTts(text, voicePreferences.speechRate, speakingSessionKey).catch(err => {
-        debugLog(`[Speak] Failed to render system voice audio: ${err}`);
-      });
+      // Render TTS audio via macOS say command and stream over WebSocket.
+      // Skipped when the browser is not listening: there is no audio WebSocket to
+      // deliver it to, so the rendered audio would only be discarded.
+      if (audioEnabled) {
+        enqueueTts(text, voicePreferences.speechRate, speakingSessionKey).catch(err => {
+          debugLog(`[Speak] Failed to render system voice audio: ${err}`);
+        });
+      }
     } else {
       // Background session — store in conversation history but no TTS audio
       debugLog(`[Speak] Background session ${speakingSessionKey} — storing without TTS: "${text.slice(0, 30)}..."`);
@@ -1876,7 +1896,10 @@ app.post('/api/speak', async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      message: 'Text spoken successfully',
+      message: audioEnabled
+        ? 'Text spoken successfully'
+        : 'Text recorded in the conversation; audio skipped because voice input is not active',
+      spoken: audioEnabled,
       respondedCount: deliveredUtterances.length
     });
   } catch (error) {
@@ -2083,10 +2106,13 @@ function startHttpsServer() {
 
 // Helper function to get voice response reminder
 function getVoiceResponseReminder(): string {
-  const voiceActive = voicePreferences.voiceActive;
-  return voiceActive
-    ? '\n\nThe user has enabled voice responses, so use the \'speak\' tool to respond to the user\'s voice input before proceeding.'
-    : '';
+  if (voicePreferences.voiceActive) {
+    return '\n\nThe user has enabled voice responses, so use the \'speak\' tool to respond to the user\'s voice input before proceeding.';
+  }
+  if (isChatActive()) {
+    return '\n\nThe user is watching the chat UI, so use the \'speak\' tool to respond before proceeding. Your reply appears as a chat message; no audio is played while the microphone is off.';
+  }
+  return '';
 }
 
 // MCP Server Setup (only if MCP-managed)
