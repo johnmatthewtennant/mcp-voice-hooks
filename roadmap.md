@@ -35,6 +35,10 @@ Create an MCP server that enables real-time voice interaction with Claude Code a
 
 ### Next tasks
 
+- [x] Let the browser chat work with the microphone off
+  - [x] `/api/speak` records the reply instead of returning 400 when voice input is inactive
+  - [x] Wait loop exits on "no microphone **and** no browser attached" rather than microphone alone
+  - [x] Voice response reminder still asks for `speak` when only the chat UI is watching
 - [ ] Add ability to delete pending messages in messenger UI
 - [x] Add UI switch buttons in both interfaces
   - [x] Add button in messenger UI top right to switch to legacy UI
